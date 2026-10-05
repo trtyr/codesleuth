@@ -339,7 +339,7 @@ pub fn plan_chunks(repo_root: &Path, nodes: &[SymbolRow]) -> CsResult<Vec<Chunk>
                 .push((*eff_start, *end));
         }
 
-        // leftover：codegraph 已知文件里未被覆盖的行（≥3 非空行才算）
+        // leftover：codegraph 已知文件里未被覆盖的行（≥2 非空行才算，P005 R6.1 对齐注释与实现）
         let spans = covered.entry(file.clone()).or_default();
         spans.sort();
         let mut merged: Vec<(usize, usize)> = Vec::new();

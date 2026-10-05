@@ -45,14 +45,13 @@ pub const FENCE_DENIED: CsCode = CsCode(3003);
 // ---- CS4xxx 索引 ----
 pub const INDEX_NOT_AVAILABLE: CsCode = CsCode(4010);
 pub const INDEX_BUILD_FAILED: CsCode = CsCode(4011);
-pub const INDEX_STALE: CsCode = CsCode(4012);
-pub const INDEX_CORRUPT: CsCode = CsCode(4013);
+// 4012 INDEX_STALE / 4013 INDEX_CORRUPT 预留段位（P005 R6.2 清理零引用常量，需要时再启用）
 pub const INDEX_TIMEOUT: CsCode = CsCode(4014);
 pub const INDEX_EMBED_FAILED: CsCode = CsCode(4015);
 pub const INDEX_LOCKED: CsCode = CsCode(4016);
 // ---- CS5xxx 内部 ----
 pub const INTERNAL: CsCode = CsCode(5001);
-pub const ENGINE_NOT_WIRED: CsCode = CsCode(5099);
+// 5099 ENGINE_NOT_WIRED 预留段位（P005 R6.2 清理零引用常量）
 
 /// 一等错误：码 + 消息 + 修复建议 + 可重试标记。
 #[derive(Debug, thiserror::Error)]

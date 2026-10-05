@@ -159,7 +159,7 @@ impl Harness {
                     "prompt_tokens": resp.usage.prompt_tokens,
                     "completion_tokens": resp.usage.completion_tokens,
                     "total_tokens": resp.usage.total_tokens,
-                    "text": resp.text,
+                    "text": resp.text.clone(),
                     "tool_call_count": resp.tool_calls.len(),
                 }),
             )?;
@@ -168,6 +168,12 @@ impl Harness {
             if resp.tool_calls.is_empty() {
                 prose_streak += 1;
                 if prose_streak <= 1 {
+                    // P005 R6.1：模型首轮 prose 入史——只推引导会把模型刚说的话丢出上下文，
+                    // 且连续两条 User 消息部分严格网关拒收
+                    messages.push(ChatMessage::Assistant {
+                        content: resp.text.clone(),
+                        tool_calls: Vec::new(),
+                    });
                     messages.push(ChatMessage::User {
                         content: "请调用 submit_report 工具提交结构化报告（answer/findings/dead_ends/confidence），evidence 引用本会话真实读过的 file:lines。".into(),
                     });

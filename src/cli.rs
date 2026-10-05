@@ -147,15 +147,12 @@ impl Cli {
             .base_url
             .clone()
             .unwrap_or_else(|| cfg.llm.base_url.clone());
-        let embed_key = match cfg.vector.api_key.clone().or_else(|| Some(api_key.clone())) {
-            Some(k) => k,
-            None => {
-                return Err(CsError::new(
-                    crate::errors::USER_INPUT,
-                    "嵌入密钥缺失：[vector].api_key 与 [llm].api_key 均未配置",
-                ));
-            }
-        };
+        // P005 R6.1：api_key 已由 resolve_api_key 校验非空，or_else 恒 Some——原 None 分支不可达（死代码删除）
+        let embed_key = cfg
+            .vector
+            .api_key
+            .clone()
+            .unwrap_or_else(|| api_key.clone());
         let mode = match cfg.vector.embed_mode.as_str() {
             "raw" => vector::EmbedMode::Raw,
             _ => vector::EmbedMode::Composite,

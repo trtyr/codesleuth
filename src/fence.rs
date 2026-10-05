@@ -34,7 +34,7 @@ impl Fence {
         } else {
             std::env::current_dir().unwrap_or_default().join(&candidate)
         };
-        if !normalize(&candidate_abs).starts_with(&self.root) {
+        if !starts_with_root(&normalize(&candidate_abs), &self.root) {
             return Err(
                 CsError::new(FENCE_DENIED, format!("路径逃逸出仓库围栏: {rel}"))
                     .with_hint("只允许访问仓库内的文件"),
@@ -45,7 +45,7 @@ impl Fence {
                 .with_hint("用 find_files 先定位真实路径")
                 .with_source(format!("canonicalize: {e}"))
         })?;
-        if !resolved.starts_with(&self.root) {
+        if !starts_with_root(&resolved, &self.root) {
             return Err(
                 CsError::new(FENCE_DENIED, format!("路径逃逸出仓库围栏: {rel}"))
                     .with_hint("只允许访问仓库内的文件"),
@@ -68,6 +68,23 @@ fn normalize(p: &Path) -> PathBuf {
         }
     }
     out
+}
+
+/// 围栏前缀判定（P005 R6.1）：Windows 文件系统大小写不敏感，逐组件忽略 ASCII 大小写比较，
+/// 其余平台严格比较——避免合法路径在 Windows 被大小写差异误杀。
+fn starts_with_root(p: &Path, root: &Path) -> bool {
+    p.components().zip(root.components()).all(|(a, b)| {
+        #[cfg(windows)]
+        {
+            a.as_os_str()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&b.as_os_str().to_string_lossy())
+        }
+        #[cfg(not(windows))]
+        {
+            a.as_os_str() == b.as_os_str()
+        }
+    })
 }
 
 #[cfg(test)]

@@ -34,8 +34,8 @@ impl RecallEngine {
     pub fn open(store: VectorStore, embed: EmbedClient) -> CsResult<Self> {
         let rows = store.load_all()?;
         let model_ok = store.get_meta("model")?.as_deref() == Some(embed.model.as_str());
-        let dim = rows.first().map(|(_, v)| v.len());
-        let dim_ok = dim.map(|d| d as u32 == embed.dimensions).unwrap_or(true);
+        // P005 R6.1：全行维度校验（原只看第一行——首行正常、后续行损坏时会静默漏检）
+        let dim_ok = rows.iter().all(|(_, v)| v.len() as u32 == embed.dimensions);
         let mut alive = HashSet::new();
         for i in 0..rows.len() {
             alive.insert(i);

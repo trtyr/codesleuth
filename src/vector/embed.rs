@@ -2,7 +2,7 @@
 //!
 //! 约定（scoring/检索设计稿 §1 + Q1 决策）：
 //! - 维度默认 1024（Matryoshka 降维，E0 实验可调 4096 对比）
-//! - 批量输入（batch_size 默认 32）
+//! - 批量输入（batch_size 默认 64）
 //! - 查询侧指令前缀（Qwen3 指令感知：query 加 Instruct，doc 侧不加）
 
 use crate::errors::{CsError, CsResult, INDEX_EMBED_FAILED};

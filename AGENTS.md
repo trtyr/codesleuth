@@ -38,11 +38,8 @@ python3 scripts/eval/run_eval.py \
 
 ## 模块地图与权威方案
 
-- 目标模块地图：`docs/plantree/baseline/module-map.md`
-- 权威方案（从这里读起）：`docs/plantree/plans/001-read-only-agent-harness/topics/solution-map.md`
-- 为什么这么设计：`docs/plantree/plans/001-read-only-agent-harness/decisions/`（D001-D013）
-- eval 体系：`docs/plantree/plans/002-eval-system/`（判分规格一页纸：topics/scoring-spec.md）
-- 依赖核验结论：`docs/plantree/plans/001-read-only-agent-harness/topics/research/dependency-findings.md`
+- 本仓公开口径：事实权威 = README + 代码与模块头注释（带设计决策编号 D0xx，注释即决策摘要）。
+- 方案原文（solution-map / decisions D001-D014 / eval 判分规格）在作者本地规划态 `docs/plantree/`（.gitignore 排除，**不随仓分发**）——仓内代理按代码与注释自洽理解，勿按图索骥外部路径。
 
 ## 约定
 

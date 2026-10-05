@@ -104,6 +104,7 @@ impl VectorStore {
 
     /// 垃圾回收（用户拍板 2026-10-04）：删除当前块集合之外的失效块——向量与描述一起清，
     /// 索引学会忘记死数据（陈旧向量会指向已不存在的行号，污染召回）。
+    /// 返回实际删除的块数（P005 R6.1：按 DELETE 影响行数计，幂等重删返回 0）。
     pub fn remove_stale(&self, keys: &[String]) -> CsResult<usize> {
         Self::remove_stale_on(&self.conn, keys)
     }
@@ -124,14 +125,16 @@ impl VectorStore {
                     0
                 }
             };
-            conn.execute(
-                "DELETE FROM chunks WHERE file = ?1 AND symbol = ?2 AND line_start = ?3",
-                rusqlite::params![parts[0], parts[1], line_start],
-            )
-            .map_err(|e| CsError::new(INDEX_NOT_AVAILABLE, format!("GC 删除块失败: {e}")))?;
+            let deleted = conn
+                .execute(
+                    "DELETE FROM chunks WHERE file = ?1 AND symbol = ?2 AND line_start = ?3",
+                    rusqlite::params![parts[0], parts[1], line_start],
+                )
+                .map_err(|e| CsError::new(INDEX_NOT_AVAILABLE, format!("GC 删除块失败: {e}")))?;
             conn.execute("DELETE FROM descriptions WHERE key = ?1", [k])
                 .map_err(|e| CsError::new(INDEX_NOT_AVAILABLE, format!("GC 删除描述失败: {e}")))?;
-            n += 1;
+            // P005 R6.1：按实际删除行数计（原实现按尝试数计，重删也 +1，报告失真）
+            n += deleted;
         }
         Ok(n)
     }
@@ -190,20 +193,6 @@ impl VectorStore {
         )
         .map_err(|e| CsError::new(INDEX_NOT_AVAILABLE, format!("chunk 写入失败: {e}")))?;
         Ok(())
-    }
-
-    /// 批量落库（单事务）：5 万块的首次构建从逐条自动提交的分钟级降到秒级。
-    pub fn upsert_chunks(&self, items: &[(Chunk, Vec<f32>)]) -> CsResult<usize> {
-        let tx = self
-            .conn
-            .unchecked_transaction()
-            .map_err(|e| CsError::new(INDEX_NOT_AVAILABLE, format!("事务开启失败: {e}")))?;
-        for (chunk, vector) in items {
-            Self::upsert_chunk_on(&tx, chunk, vector)?;
-        }
-        tx.commit()
-            .map_err(|e| CsError::new(INDEX_NOT_AVAILABLE, format!("事务提交失败: {e}")))?;
-        Ok(items.len())
     }
 
     /// 原子落一次构建（P005 R3，bugs 审查 P1 修复）：GC 删除 + 全部 upsert + meta 写入包
@@ -362,8 +351,8 @@ mod tests {
         let removed = store.remove_stale(std::slice::from_ref(&k2)).unwrap();
         assert_eq!(removed, 1);
         assert_eq!(store.count().unwrap(), 1);
-        // 幂等：再删一次不报错也不多删
-        assert_eq!(store.remove_stale(&[k2]).unwrap(), 1);
+        // 幂等：再删一次不报错；P005 R6.1 语义 = 实际删除行数，已删重删返回 0
+        assert_eq!(store.remove_stale(&[k2]).unwrap(), 0);
         assert_eq!(store.count().unwrap(), 1);
     }
 

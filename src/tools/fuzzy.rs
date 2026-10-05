@@ -17,11 +17,11 @@ use std::sync::{Arc, Mutex};
 /// 会话级模糊检索引擎：一个 picker 服务整个会话（watch=false，同步收集，无后台线程）。
 pub struct FuzzyEngine {
     picker: FilePicker,
-    fence: Arc<Fence>,
 }
 
 impl FuzzyEngine {
     pub fn new(root: &Path) -> CsResult<Self> {
+        // 围栏仅用于取规范化根目录定界 picker（P005 R6.2：原存的 Arc<Fence> 字段零读取，删）
         let fence = Fence::new(root)?;
         let mut picker = FilePicker::new(FilePickerOptions {
             base_path: fence.root().to_string_lossy().into_owned(),
@@ -33,14 +33,7 @@ impl FuzzyEngine {
         picker
             .collect_files()
             .map_err(|e| CsError::new(INDEX_BUILD_FAILED, format!("fff 文件收集失败: {e}")))?;
-        Ok(Self {
-            picker,
-            fence: Arc::new(fence),
-        })
-    }
-
-    pub fn fence(&self) -> &Fence {
-        &self.fence
+        Ok(Self { picker })
     }
 }
 
