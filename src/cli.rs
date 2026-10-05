@@ -146,14 +146,22 @@ impl Cli {
             .base_url
             .clone()
             .unwrap_or_else(|| cfg.llm.base_url.clone());
-        let embed_key = cfg.vector.api_key.clone().or_else(|| Some(api_key.clone()));
+        let embed_key = match cfg.vector.api_key.clone().or_else(|| Some(api_key.clone())) {
+            Some(k) => k,
+            None => {
+                return Err(CsError::new(
+                    crate::errors::USER_INPUT,
+                    "嵌入密钥缺失：[vector].api_key 与 [llm].api_key 均未配置",
+                ));
+            }
+        };
         let mode = match cfg.vector.embed_mode.as_str() {
             "raw" => vector::EmbedMode::Raw,
             _ => vector::EmbedMode::Composite,
         };
         let embed = vector::EmbedClient::new(
             &embed_base,
-            embed_key.as_deref().expect("嵌入密钥缺失"),
+            &embed_key,
             &cfg.vector.embed_model,
             cfg.vector.embed_dims,
         );
@@ -298,10 +306,18 @@ impl Cli {
                 .base_url
                 .clone()
                 .unwrap_or_else(|| cfg.llm.base_url.clone());
-            let embed_key = cfg.vector.api_key.clone().or_else(|| Some(api_key.clone()));
+            let embed_key = match cfg.vector.api_key.clone().or_else(|| Some(api_key.clone())) {
+                Some(k) => k,
+                None => {
+                    return Err(CsError::new(
+                        crate::errors::USER_INPUT,
+                        "嵌入密钥缺失：[vector].api_key 与 [llm].api_key 均未配置",
+                    ));
+                }
+            };
             let embed = vector::EmbedClient::new(
                 &embed_base,
-                embed_key.as_deref().expect("嵌入密钥缺失"),
+                &embed_key,
                 &cfg.vector.embed_model,
                 cfg.vector.embed_dims,
             );
@@ -462,11 +478,14 @@ impl Cli {
                     }
                 }
                 Err(e) => {
-                    let _ = audit::append_line(
+                    // write_check 留痕失败必须可见（P004 T3 吞错清零）
+                    if let Err(audit_err) = audit::append_line(
                         &outcome.audit_path,
                         "write_check",
                         &serde_json::json!({ "available": false, "error": e.message }),
-                    );
+                    ) {
+                        tracing::warn!("write_check 审计留痕失败: {audit_err}");
+                    }
                     eprintln!("# 零写入自证不可用: {e}");
                 }
             }

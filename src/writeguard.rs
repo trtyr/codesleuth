@@ -76,7 +76,14 @@ fn walk(dir: &Path, root: &Path, out: &mut Manifest) -> CsResult<()> {
                 use std::io::Read;
                 h.update(size.to_le_bytes());
                 let mut head = vec![0u8; 64 * 1024];
-                let n = f.read(&mut head).unwrap_or(0);
+                let n = match f.read(&mut head) {
+                    Ok(n) => n,
+                    Err(e) => {
+                        // >1MB 文件短读/读失败属异常（P004 T3）：灵敏度降级必须可见
+                        tracing::warn!("指纹首 64KB 读取失败 {p:?}: {e}（按 0 字节计）");
+                        0
+                    }
+                };
                 h.update(&head[..n]);
             } else {
                 std::io::copy(&mut f, &mut h)

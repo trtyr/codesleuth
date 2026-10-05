@@ -106,13 +106,17 @@ impl Harness {
             if context::should_compact(&messages, threshold) {
                 // Phase 2 先行：承上启下 handoff（先于压缩生成，确定性零 LLM）；压缩是纯函数，无驱逐则静默
                 let audit_to = self.audit.last_seq();
-                let ledger_render = self.ledger.lock().expect("ledger lock").render();
+                let ledger_render = self
+                    .ledger
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .render();
                 let handoff = context::build_handoff(task, &ledger_render, 2, audit_to);
                 let (compacted, info) =
                     context::compact(std::mem::take(&mut messages), handoff, context::KEEP_RECENT);
                 if info.evicted_count > 0 {
                     // Phase 1 持久化 + Phase 3 提交（有真实驱逐才留痕，不产噪音）
-                    let persisted = self.ledger.lock().expect("ledger lock").save();
+                    let persisted = self.ledger.lock().unwrap_or_else(|p| p.into_inner()).save();
                     self.audit.record(
                         "compaction_begin",
                         &serde_json::json!({"ledger_saved": persisted.is_ok(), "threshold_tokens": threshold}),
@@ -140,11 +144,13 @@ impl Harness {
             let resp = match self.provider.chat(&req).await {
                 Ok(r) => r,
                 Err(e) => {
-                    // 失败调用也留痕（D003.2 全留痕）
-                    let _ = self.audit.record(
+                    // 失败调用也留痕（D003.2 全留痕）；留痕本身失败也必须可见（P004 T3 吞错清零）
+                    if let Err(audit_err) = self.audit.record(
                         "llm_error",
                         &serde_json::json!({"turn": turns, "code": e.code.to_string(), "message": e.message}),
-                    );
+                    ) {
+                        tracing::warn!("llm_error 审计留痕失败: {audit_err}");
+                    }
                     return Err(e);
                 }
             };
@@ -353,12 +359,12 @@ impl Harness {
                         )?;
                         self.evidence
                             .lock()
-                            .expect("evidence lock")
+                            .unwrap_or_else(|p| p.into_inner())
                             .observe(&output, seq);
                         if let Some(p) = &read_exact_path {
                             self.evidence
                                 .lock()
-                                .expect("evidence lock")
+                                .unwrap_or_else(|p| p.into_inner())
                                 .observe_exact(p, seq);
                         }
                         let keys = info_keys(&output);
@@ -401,7 +407,7 @@ impl Harness {
                 }
             }
 
-            if let Err(e) = self.ledger.lock().expect("ledger lock").save() {
+            if let Err(e) = self.ledger.lock().unwrap_or_else(|p| p.into_inner()).save() {
                 tracing::warn!("账本保存失败: {e}");
             }
         }
@@ -490,7 +496,12 @@ impl Harness {
                         if file.is_empty() {
                             continue;
                         }
-                        match self.evidence.lock().expect("evidence lock").cite_seq(&file) {
+                        match self
+                            .evidence
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .cite_seq(&file)
+                        {
                             Some(seq) => evs.push(Evidence {
                                 file,
                                 lines,
@@ -532,7 +543,7 @@ impl Harness {
         let observed = self
             .evidence
             .lock()
-            .expect("evidence lock")
+            .unwrap_or_else(|p| p.into_inner())
             .observed_paths();
         if findings.is_empty() && !observed.is_empty() && dead_ends.is_empty() {
             let mut shown = observed.clone();

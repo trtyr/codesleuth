@@ -127,7 +127,7 @@ impl Audit {
                 line.insert(k.clone(), v.clone());
             }
         }
-        let mut f = self.file.lock().expect("audit lock");
+        let mut f = self.file.lock().unwrap_or_else(|p| p.into_inner());
         // 取号必须在锁内（P004 T2.4）：锁外取号并发时会先取号者后写盘，
         // JSONL 的「按 seq 单调」不变量即破。锁内取号+写入原子成对。
         let n = self.seq.fetch_add(1, Ordering::SeqCst) + 1;
@@ -141,7 +141,10 @@ impl Audit {
                 .map_err(|e| CsError::new(INTERNAL, format!("审计序列化失败: {e}")))?
         )
         .map_err(|e| CsError::new(INTERNAL, format!("审计写入失败: {e}")))?;
-        f.flush().ok();
+        // flush 失败不能静默（P004 T3）：审计丢行=关键失败不留痕
+        if let Err(e) = f.flush() {
+            tracing::warn!("审计行 seq {n} flush 失败: {e}");
+        }
         Ok(n)
     }
 }
@@ -169,10 +172,17 @@ pub struct Ledger {
 
 impl Ledger {
     pub fn load(path: PathBuf) -> Self {
-        let entries = std::fs::read(&path)
-            .ok()
-            .and_then(|b| serde_json::from_slice::<Vec<LedgerEntry>>(&b).ok())
-            .unwrap_or_default();
+        // 文件不存在 = 首次运行，正常；存在但解析失败 = 损坏，必须可见（P004 T3）
+        let entries = match std::fs::read(&path) {
+            Ok(b) => match serde_json::from_slice::<Vec<LedgerEntry>>(&b) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!("账本文件损坏，按空账本继续: {e}");
+                    Vec::new()
+                }
+            },
+            Err(_) => Vec::new(),
+        };
         Self { path, entries }
     }
 

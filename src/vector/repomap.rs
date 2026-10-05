@@ -41,7 +41,13 @@ pub fn repo_map_inputs(db_path: &Path) -> CsResult<(Vec<MapSymbol>, HashMap<Stri
             })
         })
         .map_err(|e| CsError::new(INDEX_NOT_AVAILABLE, format!("nodes 遍历失败: {e}")))?
-        .filter_map(|r| r.ok())
+        .filter_map(|r| match r {
+            Ok(x) => Some(x),
+            Err(e) => {
+                tracing::warn!("nodes 行解析失败已跳过: {e}");
+                None
+            }
+        })
         .collect();
     let mut degrees: HashMap<String, usize> = HashMap::new();
     let mut est = conn

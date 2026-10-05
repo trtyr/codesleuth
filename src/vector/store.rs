@@ -111,7 +111,14 @@ impl VectorStore {
             if parts.len() != 3 {
                 continue;
             }
-            let line_start = parts[2].parse::<i64>().unwrap_or(0);
+            let line_start = match parts[2].parse::<i64>() {
+                Ok(v) => v,
+                Err(e) => {
+                    // 键格式异常继续会删错行（P004 T3）：记日志后按 0 处理保持旧行为
+                    tracing::warn!("GC 键行号解析失败（{e}）：{k:?}，按 line_start=0 处理");
+                    0
+                }
+            };
             self.conn
                 .execute(
                     "DELETE FROM chunks WHERE file = ?1 AND symbol = ?2 AND line_start = ?3",

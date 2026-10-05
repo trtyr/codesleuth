@@ -61,6 +61,9 @@ pub struct CsError {
     pub message: String,
     pub hint: Option<String>,
     pub retryable: bool,
+    /// 根因链（P004 T3）：内层错误原文，供程序化溯源；人话仍在 message。
+    /// 字段名避开 `source`：thiserror 会把名为 source 的字段自动当 Error::source()，String 不满足。
+    pub source_text: Option<String>,
 }
 
 impl CsError {
@@ -70,7 +73,14 @@ impl CsError {
             message: message.into(),
             hint: None,
             retryable: false,
+            source_text: None,
         }
+    }
+
+    /// 挂根因链：map_err 时把内层错误原文存 source_text，不只在 message 里人话拼接。
+    pub fn with_source(mut self, source: impl Into<String>) -> Self {
+        self.source_text = Some(source.into());
+        self
     }
 
     pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
@@ -96,6 +106,9 @@ impl CsError {
 /// stderr 结构化报错（人读主行 + hint 行）。
 pub fn report_error(e: &CsError) {
     eprintln!("{e}");
+    if let Some(src) = &e.source_text {
+        eprintln!("  ↳ 根因: {src}");
+    }
     if let Some(hint) = &e.hint {
         eprintln!("  hint: {hint}");
     }
