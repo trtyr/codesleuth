@@ -167,16 +167,12 @@ impl Cli {
         );
         let rt = tokio::runtime::Runtime::new()
             .map_err(|e| CsError::new(INTERNAL, format!("tokio runtime 启动失败: {e}")))?;
-        // D014：手动预建索引与 run 时引导共用同一把引导锁，竞争败者判负退出
-        let _guard = match crate::bootlock::acquire(&repo_abs, crate::bootlock::DEFAULT_TIMEOUT)? {
-            crate::bootlock::BootLock::Won(g) => g,
-            crate::bootlock::BootLock::Lost => {
-                return Err(
-                    CsError::new(INDEX_LOCKED, "另一 codesleuth 进程刚完成向量索引构建")
-                        .with_hint("索引已就绪：重跑本命令即可（增量复用，秒过）"),
-                );
-            }
-        };
+        // D014：手动预建索引与 run 时引导共用同一把引导锁，竞争败者判负退出。P005 R1：语义收残 acquire_guard。
+        let _guard = crate::bootlock::acquire_guard(
+            &repo_abs,
+            crate::bootlock::DEFAULT_TIMEOUT,
+            "向量索引构建",
+        )?;
         let report = rt.block_on(vector::build_vector_index(
             &repo_abs,
             &vector::store::project_index_dir(&repo_abs),
@@ -537,16 +533,12 @@ fn setup_vector_layer(
         cfg.vector.embed_dims,
     );
     // D014：向量构建与 graph 引导共用仓库级引导锁，进程间串行化；
-    // 竞争败者（Lost）判负退出，不降级。
-    let vguard = match crate::bootlock::acquire(ctx.repo_abs, crate::bootlock::DEFAULT_TIMEOUT)? {
-        crate::bootlock::BootLock::Won(g) => g,
-        crate::bootlock::BootLock::Lost => {
-            return Err(
-                CsError::new(INDEX_LOCKED, "另一 codesleuth 进程刚完成向量索引构建")
-                    .with_hint("索引已就绪：重跑本命令即可（增量复用，秒过）"),
-            );
-        }
-    };
+    // 竞争败者判负退出，不降级。P005 R1：判负语义收残 acquire_guard。
+    let vguard = crate::bootlock::acquire_guard(
+        ctx.repo_abs,
+        crate::bootlock::DEFAULT_TIMEOUT,
+        "向量索引构建",
+    )?;
     // 索引补建失败不致命（弹性降级，E3-R1 engram CS4015 教训）：警告后尝试复用已有索引
     match ctx.rt.block_on(vector::build_vector_index(
         ctx.repo_abs,

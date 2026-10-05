@@ -5,8 +5,7 @@
 //! `CODEGRAPH_NO_DAEMON=1` 保证每会话独占进程；增量同步交给 server 的 connect-time catch-up。
 
 use crate::errors::{
-    CsError, CsResult, INDEX_BUILD_FAILED, INDEX_LOCKED, INDEX_NOT_AVAILABLE, INDEX_TIMEOUT,
-    USER_INPUT,
+    CsError, CsResult, INDEX_BUILD_FAILED, INDEX_NOT_AVAILABLE, INDEX_TIMEOUT, USER_INPUT,
 };
 use crate::mcp::McpClient;
 use crate::tools::Tool;
@@ -76,16 +75,12 @@ impl CodegraphEngine {
 
     async fn start_with_bin(root: &Path, bin: &str, force_reindex: bool) -> CsResult<Self> {
         // D014：索引引导（init/force）进仓库级引导锁，进程间串行化；
-        // 竞争败者（Lost）判负退出，不降级——重跑即可（索引已就绪）。
-        let guard = match crate::bootlock::acquire(root, crate::bootlock::DEFAULT_TIMEOUT)? {
-            crate::bootlock::BootLock::Won(g) => g,
-            crate::bootlock::BootLock::Lost => {
-                return Err(
-                    CsError::new(INDEX_LOCKED, "另一 codesleuth 进程刚完成索引引导")
-                        .with_hint("索引已就绪：重跑本命令即可（引导秒过，不再构建）"),
-                );
-            }
-        };
+        // 竞争败者判负退出，不降级——重跑即可（索引已就绪）。P005 R1：判负语义收残 acquire_guard。
+        let guard = crate::bootlock::acquire_guard(
+            root,
+            crate::bootlock::DEFAULT_TIMEOUT,
+            "codegraph 索引引导",
+        )?;
         if force_reindex {
             run_cli(bin, &["index", "--force", "--quiet"], root).await?;
         } else if !root.join(".codegraph").exists() {

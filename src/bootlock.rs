@@ -71,7 +71,10 @@ pub fn acquire(repo_root: &Path, timeout: Duration) -> CsResult<BootLock> {
 
     // 首次尝试：立即拿到 = 赢家，无竞争。
     match file.try_lock() {
-        Ok(()) => return Ok(BootLock::Won(BootLockGuard { file })),
+        Ok(()) => {
+            tracing::debug!("引导锁首次尝试即获得（无竞争）: {}", path.display());
+            return Ok(BootLock::Won(BootLockGuard { file }));
+        }
         Err(std::fs::TryLockError::Error(e)) => {
             return Err(CsError::new(INDEX_LOCKED, format!("引导锁获取失败: {e}")));
         }
@@ -81,6 +84,11 @@ pub fn acquire(repo_root: &Path, timeout: Duration) -> CsResult<BootLock> {
     // 竞争路径：轮询等待。拿到即判负——对手刚完成引导，本进程的引导已无必要，
     // 任务带着残缺工具面继续只会烧 token，故交由调用方以 INDEX_LOCKED 退出。
     let deadline = Instant::now() + timeout;
+    tracing::warn!(
+        "索引引导锁被占（{}），进入轮询等待（上限 {}s）——另一进程可能正在建索引",
+        path.display(),
+        timeout.as_secs()
+    );
     loop {
         if Instant::now() >= deadline {
             return Err(CsError::new(
@@ -91,12 +99,32 @@ pub fn acquire(repo_root: &Path, timeout: Duration) -> CsResult<BootLock> {
         }
         std::thread::sleep(POLL_INTERVAL);
         match file.try_lock() {
-            Ok(()) => return Ok(BootLock::Lost),
+            Ok(()) => {
+                tracing::warn!(
+                    "引导锁等待后获得：对手刚完成引导，本进程按 D014 判负退出（重跑秒过）"
+                );
+                return Ok(BootLock::Lost);
+            }
             Err(std::fs::TryLockError::Error(e)) => {
                 return Err(CsError::new(INDEX_LOCKED, format!("引导锁获取失败: {e}")));
             }
             Err(std::fs::TryLockError::WouldBlock) => {}
         }
+    }
+}
+
+/// acquire 的判负语义封装（P005 R1，coupling 审查去重）：graph 引导、run 时向量构建、
+/// index --vector 手动构建三个调用点统一走这里——Won 直接拿 guard 干活，
+/// Lost/等待超时 → INDEX_LOCKED 结构化错误，由调用方 `?` 传播为判负退出
+/// （cli 的降级 catch-all 放行该码，不会误降级）。`what` 用于错误文案。
+pub fn acquire_guard(repo_root: &Path, timeout: Duration, what: &str) -> CsResult<BootLockGuard> {
+    match acquire(repo_root, timeout)? {
+        BootLock::Won(g) => Ok(g),
+        BootLock::Lost => Err(CsError::new(
+            INDEX_LOCKED,
+            format!("另一 codesleuth 进程刚完成：{what}"),
+        )
+        .with_hint("索引已就绪：重跑本命令即可，引导秒过")),
     }
 }
 
@@ -152,6 +180,24 @@ mod tests {
         });
         // 超时 300ms < 轮询间隔 500ms：等待者必然在第一次轮询前撞死线。
         std::thread::sleep(Duration::from_millis(800));
+        drop(g1);
+        h.join().unwrap();
+    }
+
+    /// P005 R1：acquire_guard 判负路径 = INDEX_LOCKED 结构化错误（带 hint）。
+    #[test]
+    fn acquire_guard_reports_lost_as_index_locked() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let BootLock::Won(g1) = acquire(dir.path(), DEFAULT_TIMEOUT).unwrap() else {
+            panic!("first must win");
+        };
+        let h = std::thread::spawn(move || {
+            let err = acquire_guard(&root, DEFAULT_TIMEOUT, "测试引导").unwrap_err();
+            assert_eq!(err.code, INDEX_LOCKED);
+            assert!(err.hint.is_some());
+        });
+        std::thread::sleep(Duration::from_millis(600));
         drop(g1);
         h.join().unwrap();
     }

@@ -37,17 +37,6 @@ pub async fn build_vector_index(
 
     let store = VectorStore::open(&index_path(state_dir, &fp))?;
     let existing = store.existing_hashes()?;
-    // GC（用户拍板 2026-10-04）：当前块集合之外的旧块连向量带描述一起清（索引学会忘记死数据）
-    let current_keys: std::collections::HashSet<String> = chunks.iter().map(chunk_key).collect();
-    let gc_keys: Vec<String> = existing
-        .keys()
-        .filter(|k| !current_keys.contains(*k))
-        .cloned()
-        .collect();
-    let gc_removed = store.remove_stale(&gc_keys)?;
-    if gc_removed > 0 {
-        tracing::info!("GC: 清理 {} 个失效块", gc_removed);
-    }
     // 模型/维度/模式任一变更 → 旧向量全部作废（嵌入输入变了，复用即投毒）
     let stored_model = store.get_meta("model")?;
     let stored_dim = store.get_meta("dim")?;
@@ -56,6 +45,16 @@ pub async fn build_vector_index(
     let stale_index = stored_model.as_deref() != Some(embed.model.as_str())
         || stored_dim.as_deref() != Some(&embed.dimensions.to_string())
         || stored_mode.as_deref() != Some(mode_str.as_str());
+
+    // GC（用户拍板 2026-10-04）：当前块集合之外的旧块连向量带描述一起清（索引学会忘记死数据）。
+    // P005 R3（bugs 审查 P1）：这里只算键不删——删除挪进 commit_build 的提交事务，
+    // 消灭「旧块已删、新块写一半」的失败窗口。
+    let current_keys: std::collections::HashSet<String> = chunks.iter().map(chunk_key).collect();
+    let gc_keys: Vec<String> = existing
+        .keys()
+        .filter(|k| !current_keys.contains(*k))
+        .cloned()
+        .collect();
 
     let mut pending: Vec<Chunk> = Vec::new();
     let mut reused = 0usize;
@@ -69,7 +68,7 @@ pub async fn build_vector_index(
     }
     tracing::info!("待嵌入 {} 块（复用 {}）", pending.len(), reused);
 
-    // 组装 + 嵌入
+    // 组装 + 嵌入（网络调用在事务外：失败时索引零改动）
     let mut inputs: Vec<(Chunk, String)> = Vec::with_capacity(pending.len());
     for c in &pending {
         let input = compose_input(c, mode);
@@ -77,12 +76,23 @@ pub async fn build_vector_index(
     }
     let texts: Vec<String> = inputs.iter().map(|(_, i)| i.clone()).collect();
     let vectors = embed.embed(&texts).await?;
-    for ((c, _), v) in inputs.iter().zip(vectors.iter()) {
-        store.upsert_chunk(c, v)?;
+    let updates: Vec<(Chunk, Vec<f32>)> = inputs
+        .iter()
+        .zip(vectors.iter())
+        .map(|((c, _), v)| (c.clone(), v.clone()))
+        .collect();
+
+    // 原子落库（P005 R3）：GC 删除 + 全部 upsert + meta 同一事务，失败整体回滚
+    let gc_removed = store.commit_build(
+        &gc_keys,
+        &updates,
+        &embed.model,
+        embed.dimensions,
+        &mode_str,
+    )?;
+    if gc_removed > 0 {
+        tracing::info!("GC: 清理 {} 个失效块", gc_removed);
     }
-    store.set_meta("model", &embed.model)?;
-    store.set_meta("dim", &embed.dimensions.to_string())?;
-    store.set_meta("mode", &format!("{mode:?}"))?;
 
     let path = index_path(state_dir, &fp);
     Ok(BuildReport {

@@ -105,6 +105,11 @@ impl VectorStore {
     /// 垃圾回收（用户拍板 2026-10-04）：删除当前块集合之外的失效块——向量与描述一起清，
     /// 索引学会忘记死数据（陈旧向量会指向已不存在的行号，污染召回）。
     pub fn remove_stale(&self, keys: &[String]) -> CsResult<usize> {
+        Self::remove_stale_on(&self.conn, keys)
+    }
+
+    /// remove_stale 的连接参数化内核（P005 R3）：同一 GC 逻辑可在事务内复用。
+    fn remove_stale_on(conn: &Connection, keys: &[String]) -> CsResult<usize> {
         let mut n = 0usize;
         for k in keys {
             let parts: Vec<&str> = k.split('\u{1}').collect();
@@ -119,14 +124,12 @@ impl VectorStore {
                     0
                 }
             };
-            self.conn
-                .execute(
-                    "DELETE FROM chunks WHERE file = ?1 AND symbol = ?2 AND line_start = ?3",
-                    rusqlite::params![parts[0], parts[1], line_start],
-                )
-                .map_err(|e| CsError::new(INDEX_NOT_AVAILABLE, format!("GC 删除块失败: {e}")))?;
-            self.conn
-                .execute("DELETE FROM descriptions WHERE key = ?1", [k])
+            conn.execute(
+                "DELETE FROM chunks WHERE file = ?1 AND symbol = ?2 AND line_start = ?3",
+                rusqlite::params![parts[0], parts[1], line_start],
+            )
+            .map_err(|e| CsError::new(INDEX_NOT_AVAILABLE, format!("GC 删除块失败: {e}")))?;
+            conn.execute("DELETE FROM descriptions WHERE key = ?1", [k])
                 .map_err(|e| CsError::new(INDEX_NOT_AVAILABLE, format!("GC 删除描述失败: {e}")))?;
             n += 1;
         }
@@ -162,26 +165,30 @@ impl VectorStore {
 
     /// 写入/覆盖一个 chunk 及其向量。
     pub fn upsert_chunk(&self, chunk: &Chunk, vector: &[f32]) -> CsResult<()> {
-        self.conn
-            .execute(
-                "INSERT INTO chunks (file, line_start, line_end, symbol, kind, language, text_hash, embedding, dim)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-                 ON CONFLICT(file, symbol, line_start) DO UPDATE SET
-                   line_end = excluded.line_end, kind = excluded.kind, language = excluded.language,
-                   text_hash = excluded.text_hash, embedding = excluded.embedding, dim = excluded.dim",
-                rusqlite::params![
-                    chunk.file,
-                    chunk.line_start as i64,
-                    chunk.line_end as i64,
-                    chunk.symbol,
-                    chunk.kind,
-                    chunk.language,
-                    chunk.text_hash,
-                    vec_to_blob(vector),
-                    vector.len() as i64,
-                ],
-            )
-            .map_err(|e| CsError::new(INDEX_NOT_AVAILABLE, format!("chunk 写入失败: {e}")))?;
+        Self::upsert_chunk_on(&self.conn, chunk, vector)
+    }
+
+    /// upsert 的连接参数化内核（P005 R3）：同一写入逻辑可在事务内复用。
+    fn upsert_chunk_on(conn: &Connection, chunk: &Chunk, vector: &[f32]) -> CsResult<()> {
+        conn.execute(
+            "INSERT INTO chunks (file, line_start, line_end, symbol, kind, language, text_hash, embedding, dim)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(file, symbol, line_start) DO UPDATE SET
+               line_end = excluded.line_end, kind = excluded.kind, language = excluded.language,
+               text_hash = excluded.text_hash, embedding = excluded.embedding, dim = excluded.dim",
+            rusqlite::params![
+                chunk.file,
+                chunk.line_start as i64,
+                chunk.line_end as i64,
+                chunk.symbol,
+                chunk.kind,
+                chunk.language,
+                chunk.text_hash,
+                vec_to_blob(vector),
+                vector.len() as i64,
+            ],
+        )
+        .map_err(|e| CsError::new(INDEX_NOT_AVAILABLE, format!("chunk 写入失败: {e}")))?;
         Ok(())
     }
 
@@ -192,29 +199,47 @@ impl VectorStore {
             .unchecked_transaction()
             .map_err(|e| CsError::new(INDEX_NOT_AVAILABLE, format!("事务开启失败: {e}")))?;
         for (chunk, vector) in items {
-            tx.execute(
-                "INSERT INTO chunks (file, line_start, line_end, symbol, kind, language, text_hash, embedding, dim)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-                 ON CONFLICT(file, symbol, line_start) DO UPDATE SET
-                   line_end = excluded.line_end, kind = excluded.kind, language = excluded.language,
-                   text_hash = excluded.text_hash, embedding = excluded.embedding, dim = excluded.dim",
-                rusqlite::params![
-                    chunk.file,
-                    chunk.line_start as i64,
-                    chunk.line_end as i64,
-                    chunk.symbol,
-                    chunk.kind,
-                    chunk.language,
-                    chunk.text_hash,
-                    vec_to_blob(vector),
-                    vector.len() as i64,
-                ],
-            )
-            .map_err(|e| CsError::new(INDEX_NOT_AVAILABLE, format!("chunk 批量写入失败: {e}")))?;
+            Self::upsert_chunk_on(&tx, chunk, vector)?;
         }
         tx.commit()
             .map_err(|e| CsError::new(INDEX_NOT_AVAILABLE, format!("事务提交失败: {e}")))?;
         Ok(items.len())
+    }
+
+    /// 原子落一次构建（P005 R3，bugs 审查 P1 修复）：GC 删除 + 全部 upsert + meta 写入包
+    /// 同一事务——任一步失败整体回滚，索引保持旧态，杜绝「旧块已删、新块写一半」中间态。
+    /// 嵌入等网络调用必须在调用方的事务外完成。
+    pub fn commit_build(
+        &self,
+        gc_keys: &[String],
+        updates: &[(Chunk, Vec<f32>)],
+        model: &str,
+        dim: u32,
+        mode: &str,
+    ) -> CsResult<usize> {
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| CsError::new(INDEX_NOT_AVAILABLE, format!("事务开启失败: {e}")))?;
+        let gc_removed = Self::remove_stale_on(&tx, gc_keys)?;
+        for (chunk, vector) in updates {
+            Self::upsert_chunk_on(&tx, chunk, vector)?;
+        }
+        for (k, v) in [
+            ("model", model.to_string()),
+            ("dim", dim.to_string()),
+            ("mode", mode.to_string()),
+        ] {
+            tx.execute(
+                "INSERT INTO meta (key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                rusqlite::params![k, v],
+            )
+            .map_err(|e| CsError::new(INDEX_NOT_AVAILABLE, format!("meta 写入失败: {e}")))?;
+        }
+        tx.commit()
+            .map_err(|e| CsError::new(INDEX_NOT_AVAILABLE, format!("事务提交失败: {e}")))?;
+        Ok(gc_removed)
     }
 
     pub fn count(&self) -> CsResult<i64> {
@@ -379,6 +404,52 @@ mod tests {
         assert_eq!(
             store.get_meta("model").unwrap().as_deref(),
             Some("Qwen/Qwen3-Embedding-8B")
+        );
+    }
+
+    /// P005 R3：commit_build 三写齐验——GC 删除、upsert 覆盖/新增、meta 翻新在同一事务内生效。
+    #[test]
+    fn commit_build_applies_gc_upsert_meta() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = VectorStore::open(&dir.path().join("v.db")).unwrap();
+        let c1 = mk_chunk("a.rs", "old_fn", 1, "fn old() {}");
+        let c2 = mk_chunk("a.rs", "keep_fn", 10, "fn keep() {}");
+        store
+            .commit_build(
+                &[],
+                &[
+                    (c1.clone(), vec![0.1f32, 0.2]),
+                    (c2.clone(), vec![0.3, 0.4]),
+                ],
+                "model-a",
+                2,
+                "Raw",
+            )
+            .unwrap();
+        assert_eq!(store.count().unwrap(), 2);
+        assert_eq!(store.get_meta("model").unwrap().as_deref(), Some("model-a"));
+
+        // 第二次构建：c1 出集合 → GC；c3 新增；meta 翻新
+        let c3 = mk_chunk("a.rs", "new_fn", 30, "fn new() {}");
+        let removed = store
+            .commit_build(
+                std::slice::from_ref(&chunk_key(&c1)),
+                &[(c3.clone(), vec![0.5, 0.6])],
+                "model-b",
+                2,
+                "Composite",
+            )
+            .unwrap();
+        assert_eq!(removed, 1);
+        assert_eq!(store.count().unwrap(), 2);
+        let hashes = store.existing_hashes().unwrap();
+        assert!(hashes.contains_key(&chunk_key(&c2)));
+        assert!(hashes.contains_key(&chunk_key(&c3)));
+        assert!(!hashes.contains_key(&chunk_key(&c1)));
+        assert_eq!(store.get_meta("model").unwrap().as_deref(), Some("model-b"));
+        assert_eq!(
+            store.get_meta("mode").unwrap().as_deref(),
+            Some("Composite")
         );
     }
 
