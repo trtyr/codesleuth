@@ -1,0 +1,10 @@
+{
+  "fixture": "fixture-py",
+  "kind": "concept",
+  "questions": [
+    { "q": "活儿干砸了怎么争取再来一次的机会？最多争取几回？", "expect_files": ["src/fixture_py/retry.py"], "expect_facts": ["3"], "banned": ["retry", "重试", "Retry", "attempt", "MAX"], "fact_ref": "src/fixture_py/retry.py:5 MAX_ATTEMPTS=3" },
+    { "q": "哪些响应码值得再发一次，哪些直接放弃？", "expect_files": ["src/fixture_py/exceptions.py"], "expect_facts": ["429"], "banned": ["RETRYABLE", "is_retryable", "重试", "retry", "状态码"], "fact_ref": "src/fixture_py/exceptions.py:5 RETRYABLE_STATUS={429,500,502,503,504}" },
+    { "q": "两次之间歇多久，这个数是怎么变的？", "expect_files": ["src/fixture_py/backoff.py"], "expect_facts": ["200"], "banned": ["backoff", "delay", "退避", "sleep_ms", "BASE_DELAY"], "fact_ref": "src/fixture_py/backoff.py:5,9 BASE_DELAY_MS=200 指数翻倍" },
+    { "q": "反复争取都失败之后，外面会收到什么异常？", "expect_files": ["src/fixture_py/retry.py"], "expect_facts": ["RetryError"], "banned": ["retry", "Retry", "重试", "RetryError"], "fact_ref": "src/fixture_py/retry.py:12-13,26" }
+  ]
+}

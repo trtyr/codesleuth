@@ -1,0 +1,10 @@
+{
+  "fixture": "engram",
+  "kind": "concept",
+  "questions": [
+    { "q": "AI 助手通过工具调用的方式想修改某个页面的内容，第一个把关的是谁？它会查什么？", "expect_files": ["server/crates/mcp/src/dispatch.rs"], "expect_facts": ["check_action_access"], "banned": ["check_action_access", "dispatch", "call_tool", "wiki", "鉴权", "权限", "access", "Action"], "fact_ref": "server/crates/mcp/src/dispatch.rs:552-574（call_tool 调 check_action_access；R1 审计 #40）" },
+    { "q": "外部程序走网页接口往站点里发一篇文章，进门的第一道关卡是谁？它会查什么？", "expect_files": ["server/crates/api/src/auth.rs"], "expect_facts": ["bearer_auth"], "banned": ["bearer_auth", "Bearer", "auth", "token", "鉴权", "权限", "wiki", "require_scope", "amk", "ams"], "fact_ref": "server/crates/api/src/auth.rs:102-144（bearer_auth 中间件：ams_/amk_ 分流+过期校验）+ routes/mod.rs:108-130（authed 层挂载；E3-R1 审计 #7/#17）" },
+    { "q": "页面被覆盖写入之后，之前的内容还能找回来吗？靠什么机制？", "expect_files": ["server/crates/wiki-engine/src/service/pages.rs"], "expect_facts": ["version"], "banned": ["put_page", "version", "Version", "wiki", "快照"], "fact_ref": "server/crates/wiki-engine/src/service/pages.rs:138-186（R1 审计 #2）" },
+    { "q": "移除一个页面的时候，跟它相关的那些连接信息是怎么处理的？", "expect_files": ["server/crates/wiki-engine/src/service/pages.rs"], "expect_facts": ["wiki_links"], "banned": ["wiki", "Wiki", "link", "Link", "删除", "delete", "page", "Page"], "fact_ref": "service/pages.rs put_page 删除分支级联清理（R1 报告 findings）" }
+  ]
+}

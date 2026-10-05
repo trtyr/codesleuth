@@ -1,0 +1,29 @@
+{
+  "description": "录制回放 fixture：2026-10-03 fixture-rs 真网关会话的 LLM 响应序列（裁剪自真实运行）。",
+  "responses": [
+    {
+      "tool_calls": [
+        { "id": "1", "name": "find_files", "arguments": "{\"query\":\"retry\"}" }
+      ]
+    },
+    {
+      "tool_calls": [
+        { "id": "2", "name": "grep", "arguments": "{\"pattern\":\"retry_with_backoff\"}" }
+      ]
+    },
+    {
+      "tool_calls": [
+        { "id": "3", "name": "read", "arguments": "{\"path\":\"src/retry.rs\"}" }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "id": "4",
+          "name": "submit_report",
+          "arguments": "{\"answer\":\"重试逻辑位于 src/retry.rs 的 retry_with_backoff\",\"findings\":[{\"statement\":\"核心重试函数 retry_with_backoff\",\"evidence\":[{\"file\":\"src/retry.rs\",\"lines\":\"7-22\"}]}],\"dead_ends\":[],\"confidence\":\"high\"}"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "fixture": "fixture-ts",
+  "questions": [
+    { "q": "重试逻辑在哪个文件？", "expect_files": ["src/retry.ts"], "fact_ref": "src/retry.ts:5 retryWithBackoff" },
+    { "q": "DEFAULT_MAX_RETRIES 的值是多少，定义在哪？", "expect_files": ["src/retry.ts"], "fact_ref": "src/retry.ts:2 = 3" },
+    { "q": "retryWithBackoff 被谁调用？", "expect_files": ["src/http.ts"], "fact_ref": "src/http.ts:9" },
+    { "q": "fetchWithRetry 在哪个文件？它做什么？", "expect_files": ["src/http.ts"], "fact_ref": "src/http.ts:8" },
+    { "q": "入口文件是哪个？它调用了什么？", "expect_files": ["src/index.ts"], "fact_ref": "src/index.ts:3-8 main -> fetchWithRetry" },
+    { "q": "sleep 函数在哪个文件？", "expect_files": ["src/retry.ts"], "fact_ref": "src/retry.ts:18" },
+    { "q": "FetchOptions 接口有哪些字段？", "expect_files": ["src/http.ts"], "fact_ref": "src/http.ts:3-6 url / timeoutMs" },
+    { "q": "退避时间怎么计算的？", "expect_files": ["src/retry.ts"], "fact_ref": "src/retry.ts:12 200 * 2 ** attempt" },
+    { "q": "这个仓库是做什么用的？", "expect_files": ["README.md", "src/index.ts"], "fact_ref": "README.md:1 + src/index.ts" },
+    { "q": "fetchWithRetry 失败时抛什么错误？", "expect_files": ["src/http.ts"], "fact_ref": "src/http.ts:11 throw new Error(`http ${res.status}`)" },
+    { "q": "index.ts 请求的 URL 是什么？", "expect_files": ["src/index.ts"], "expect_facts": ["http://localhost:8080"], "fact_ref": "src/index.ts:4" },
+    { "q": "FetchOptions 的 timeoutMs 字段实际被使用了吗？", "expect_files": ["src/http.ts"], "fact_ref": "src/http.ts:5 定义；:10 fetch(opts.url) 未使用（死字段，考察诚实回答）" },
+    { "q": "retryWithBackoff 的退避基数是多少毫秒？", "expect_files": ["src/retry.ts"], "expect_facts": ["200"], "fact_ref": "src/retry.ts:12" },
+    { "q": "sleep 函数返回什么类型？", "expect_files": ["src/retry.ts"], "expect_facts": ["Promise"], "fact_ref": "src/retry.ts:18-20" },
+    { "q": "index.ts 的 main 传入的 timeoutMs 是多少？", "expect_files": ["src/index.ts"], "expect_facts": ["1000"], "fact_ref": "src/index.ts:4 timeoutMs: 1000" }
+  ]
+}

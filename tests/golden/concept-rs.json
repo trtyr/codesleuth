@@ -1,0 +1,10 @@
+{
+  "fixture": "fixture-rs",
+  "kind": "concept",
+  "questions": [
+    { "q": "网络请求被拒绝了之后，这套代码会怎么继续尝试？一直失败的话最多会坚持几次？", "expect_files": ["src/retry.rs"], "expect_facts": ["3"], "banned": ["retry", "重试", "backoff", "退避", "MAX_RETRIES"], "fact_ref": "src/retry.rs:4 MAX_RETRIES=3 + :7 循环" },
+    { "q": "等一下再试的间隔时间是怎么算出来的？", "expect_files": ["src/retry.rs"], "expect_facts": ["200"], "banned": ["retry", "重试", "backoff", "退避", "delay"], "fact_ref": "src/retry.rs:19 Duration::from_millis(200u64 << attempt)" },
+    { "q": "什么样的错误码值得再给对方一次机会，什么样的就该死心？", "expect_files": ["src/retry.rs"], "expect_facts": ["429"], "banned": ["is_retryable", "可重试", "重试", "retry", "状态码"], "fact_ref": "src/retry.rs:29 status == 429 || status >= 500" },
+    { "q": "这套程序启动时默认连到哪里？多久会超时？", "expect_files": ["src/config.rs"], "expect_facts": ["http://localhost:8080", "5000"], "banned": ["config", "endpoint", "timeout", "load_default", "Config"], "fact_ref": "src/config.rs:10-11" }
+  ]
+}

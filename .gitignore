@@ -1,0 +1,12 @@
+/target
+
+# 本地规划文档——用户决定不入 git（2026-10-03，勿移除）
+/docs/plantree/
+
+# 本地密钥与环境变量
+.env
+
+# fixture 上的 codegraph 索引（测试靶子的工具元数据，不入库）
+tests/fixtures/**/.codegraph/
+__pycache__/
+*.pyc

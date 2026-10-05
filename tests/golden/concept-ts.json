@@ -1,0 +1,10 @@
+{
+  "fixture": "fixture-ts",
+  "kind": "concept",
+  "questions": [
+    { "q": "请求失败了怎么再多试几次？最多几次？", "expect_files": ["src/retry.ts"], "expect_facts": ["3"], "banned": ["retry", "重试", "Retry", "DEFAULT_MAX_RETRIES"], "fact_ref": "src/retry.ts:2 DEFAULT_MAX_RETRIES=3 + :5 retryWithBackoff" },
+    { "q": "两次尝试之间要歇多久，这个间隔是怎么定的？", "expect_files": ["src/retry.ts"], "expect_facts": ["200"], "banned": ["retry", "重试", "Retry", "sleep", "退避"], "fact_ref": "src/retry.ts:12 sleep(200 * 2 ** attempt)" },
+    { "q": "拿到不正常的响应时，这段代码会往外扔一个什么？", "expect_files": ["src/http.ts"], "expect_facts": ["Error"], "banned": ["fetch", "Fetch", "fetchWithRetry", "throw"], "fact_ref": "src/http.ts:11 throw new Error(`http ${res.status}`)" },
+    { "q": "声明出来的那些选项里，有没有其实根本没人用的字段？", "expect_files": ["src/http.ts"], "banned": ["timeoutMs", "FetchOptions", "fetchWithRetry", "timeout", "Options"], "fact_ref": "src/http.ts:5 timeoutMs 定义；:10 fetch(opts.url) 未使用（死字段诚实度考题）" }
+  ]
+}

@@ -1,0 +1,5 @@
+[project]
+name = "fixture-py"
+version = "0.1.0"
+description = "样例 Python 仓库：重试（装饰器）与 HTTP 模块，给金标集当靶子"
+requires-python = ">=3.10"

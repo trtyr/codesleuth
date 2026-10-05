@@ -1,0 +1,20 @@
+{
+  "fixture": "fixture-rs",
+  "questions": [
+    { "q": "重试逻辑在哪个文件？", "expect_files": ["src/retry.rs"], "fact_ref": "src/retry.rs:7 fn retry_with_backoff" },
+    { "q": "MAX_RETRIES 的值是多少，定义在哪个文件？", "expect_files": ["src/retry.rs"], "fact_ref": "src/retry.rs:4 MAX_RETRIES: u32 = 3" },
+    { "q": "retry_with_backoff 被谁调用？", "expect_files": ["src/main.rs"], "fact_ref": "src/main.rs:7 retry::retry_with_backoff(...)" },
+    { "q": "默认配置的 endpoint 是什么，在哪个文件定义？", "expect_files": ["src/config.rs"], "fact_ref": "src/config.rs:10 \"http://localhost:8080\"" },
+    { "q": "main 函数里怎么使用重试功能的？", "expect_files": ["src/main.rs"], "fact_ref": "src/main.rs:7" },
+    { "q": "is_retryable 认为哪些 HTTP 状态码可重试？", "expect_files": ["src/retry.rs"], "fact_ref": "src/retry.rs:29 status == 429 || status >= 500" },
+    { "q": "这个 crate 的入口文件是哪个？", "expect_files": ["src/main.rs"], "fact_ref": "src/main.rs:4 fn main" },
+    { "q": "Config 结构体有哪些字段？", "expect_files": ["src/config.rs"], "fact_ref": "src/config.rs:3-6 endpoint / timeout_ms" },
+    { "q": "退避等待时间是怎么计算的？", "expect_files": ["src/retry.rs"], "fact_ref": "src/retry.rs:19 Duration::from_millis(200u64 << attempt)" },
+    { "q": "这个仓库是做什么用的？", "expect_files": ["README.md", "src/main.rs"], "fact_ref": "README.md:1 + src/main.rs" },
+    { "q": "退避基数是多少毫秒？", "expect_files": ["src/retry.rs"], "expect_facts": ["200"], "fact_ref": "src/retry.rs:19 基数 200ms 左移翻倍" },
+    { "q": "重试次数耗尽后 retry_with_backoff 返回什么？", "expect_files": ["src/retry.rs"], "expect_facts": ["Err"], "fact_ref": "src/retry.rs:17 return Err(e)" },
+    { "q": "retry_with_backoff 的闭包参数是什么 trait 约束？", "expect_files": ["src/retry.rs"], "expect_facts": ["FnMut"], "fact_ref": "src/retry.rs:9 F: FnMut() -> Result<T, E>" },
+    { "q": "Config 的默认 timeout_ms 是多少？", "expect_files": ["src/config.rs"], "expect_facts": ["5000"], "fact_ref": "src/config.rs:11 timeout_ms: 5000" },
+    { "q": "is_retryable 函数定义在哪个文件？目前有代码调用它吗？", "expect_files": ["src/retry.rs"], "fact_ref": "src/retry.rs:28 定义；全仓无调用点（死代码，考察诚实回答）" }
+  ]
+}
