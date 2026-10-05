@@ -10,11 +10,12 @@ pub struct Fence {
 
 impl Fence {
     pub fn new(root: &Path) -> CsResult<Self> {
-        let root = dunce::canonicalize(root).map_err(|_| {
+        let root = dunce::canonicalize(root).map_err(|e| {
             CsError::new(
                 REPO_NOT_FOUND,
                 format!("仓库根目录不可达: {}", root.display()),
             )
+            .with_source(format!("canonicalize: {e}"))
         })?;
         Ok(Self { root })
     }
@@ -39,9 +40,10 @@ impl Fence {
                     .with_hint("只允许访问仓库内的文件"),
             );
         }
-        let resolved = dunce::canonicalize(&candidate).map_err(|_| {
+        let resolved = dunce::canonicalize(&candidate).map_err(|e| {
             CsError::new(REPO_NOT_FOUND, format!("路径不存在: {rel}"))
                 .with_hint("用 find_files 先定位真实路径")
+                .with_source(format!("canonicalize: {e}"))
         })?;
         if !resolved.starts_with(&self.root) {
             return Err(

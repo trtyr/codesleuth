@@ -132,11 +132,12 @@ impl Cli {
     }
 
     fn run_index_vector(overrides: &CliOverrides, path: &PathBuf) -> CsResult<()> {
-        let repo_abs = dunce::canonicalize(path).map_err(|_| {
+        let repo_abs = dunce::canonicalize(path).map_err(|e| {
             CsError::new(
                 REPO_NOT_FOUND,
                 format!("目标仓库不存在或不可达: {}", path.display()),
             )
+            .with_source(format!("canonicalize: {e}"))
         })?;
         let cfg = config::load(overrides.clone())?;
         let api_key = cfg.resolve_api_key()?;
@@ -213,12 +214,13 @@ impl Cli {
             CsError::new(USER_INPUT, "缺少 --repo")
                 .with_hint("用法: codesleuth \"<task>\" --repo <path>")
         })?;
-        let repo_abs = dunce::canonicalize(&repo).map_err(|_| {
+        let repo_abs = dunce::canonicalize(&repo).map_err(|e| {
             CsError::new(
                 REPO_NOT_FOUND,
                 format!("目标仓库不存在或不可达: {}", repo.display()),
             )
             .with_hint("检查路径是否正确（支持相对路径）")
+            .with_source(format!("canonicalize: {e}"))
         })?;
 
         let overrides = CliOverrides {
@@ -274,6 +276,11 @@ impl Cli {
             }
             Err(e) => {
                 tracing::warn!("codegraph 未就绪（结构工具降级，其余继续）: {e}");
+                // P005 R5.2：非致命降级进审计留痕（最佳 effort，不留痕失败不掩主流程）
+                let _ = audit_log.record(
+                    "degraded",
+                    &serde_json::json!({"component": "codegraph", "error": e.to_string()}),
+                );
                 None
             }
         };
@@ -311,6 +318,7 @@ impl Cli {
                     api_key: &api_key,
                     cg_db: &cg_db,
                     rt: &rt,
+                    audit: &audit_log,
                 },
                 &cfg,
                 self.repo_map,
@@ -324,6 +332,11 @@ impl Cli {
                 }
                 Err(e) => {
                     tracing::warn!("向量层装配失败（本会话无召回层，任务继续）: {e}");
+                    // P005 R5.2：非致命降级进审计留痕
+                    let _ = audit_log.record(
+                        "degraded",
+                        &serde_json::json!({"component": "vector_layer", "error": e.to_string()}),
+                    );
                 }
             }
         }
@@ -342,6 +355,11 @@ impl Cli {
                 }
                 Err(e) => {
                     tracing::warn!("导航图构建失败（跳过注入）: {e}");
+                    // P005 R5.2：非致命降级进审计留痕
+                    let _ = audit_log.record(
+                        "degraded",
+                        &serde_json::json!({"component": "repo_map", "error": e.to_string()}),
+                    );
                 }
             }
         }
@@ -492,6 +510,8 @@ struct VectorLayerCtx<'a> {
     api_key: &'a str,
     cg_db: &'a std::path::Path,
     rt: &'a tokio::runtime::Runtime,
+    /// P005 R5.2：内层非致命降级（构建失败/召回失败）也进审计留痕
+    audit: &'a audit::Audit,
 }
 
 /// 向量层装配：补建索引 → 开库 → 注册 vector_search → 召回暖启动 + 任务导航图。
@@ -552,6 +572,11 @@ fn setup_vector_layer(
         ),
         Err(e) => {
             tracing::warn!("向量索引构建失败（降级：尝试复用已有索引）: {e}");
+            // P005 R5.2：非致命降级进审计留痕（best-effort）
+            let _ = ctx.audit.record(
+                "degraded",
+                &serde_json::json!({"component": "vector_build", "error": e.to_string()}),
+            );
         }
     }
     drop(vguard); // 构建段结束即放锁（D014：锁不跨 LLM 调用、不罩检索）
@@ -575,6 +600,11 @@ fn setup_vector_layer(
         Ok(h) => h,
         Err(e) => {
             tracing::warn!("召回失败（跳过注入）: {e}");
+            // P005 R5.2：非致命降级进审计留痕（best-effort）
+            let _ = ctx.audit.record(
+                "degraded",
+                &serde_json::json!({"component": "recall", "error": e.to_string()}),
+            );
             Vec::new()
         }
     };

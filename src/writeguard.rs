@@ -67,7 +67,8 @@ fn walk(dir: &Path, root: &Path, out: &mut Manifest) -> CsResult<()> {
         } else if ft.is_file() {
             let rel = p
                 .strip_prefix(root)
-                .expect("strip_prefix root")
+                // P005 R5.3：唯一生产 expect 改错误传播——walk 逻辑上不可达，但形式上不崩溃
+                .map_err(|e| CsError::new(REPO_NOT_READABLE, format!("快照路径越界 {p:?}: {e}")))?
                 .to_string_lossy()
                 .replace('\\', "/");
             let mut h = Sha256::new();
