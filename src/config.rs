@@ -17,6 +17,15 @@ pub struct FileConfig {
     pub vector: FileVector,
     #[serde(default)]
     pub behavior: FileBehavior,
+    #[serde(default)]
+    pub graph: FileGraph,
+}
+
+/// 结图层文件形态（P005 R7.2：CODEGRAPH_BIN env 收编进配置链）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct FileGraph {
+    /// codegraph 可执行名（缺席 = "codegraph"）。
+    pub bin: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -55,7 +64,15 @@ pub struct Config {
     pub llm: LlmConfig,
     pub context: ContextConfig,
     pub vector: VectorConfig,
+    /// 结图层（P005 R7.2）。
+    pub graph: GraphConfig,
     pub thinking_disabled: bool,
+}
+
+/// 结图层参数（P005 R7.2）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct GraphConfig {
+    pub bin: String,
 }
 
 /// 向量层参数（原散落 env，2026-10-05 收编进配置链）。
@@ -108,6 +125,9 @@ impl Default for Config {
                 api_key: None,
             },
             thinking_disabled: true,
+            graph: GraphConfig {
+                bin: "codegraph".into(),
+            },
         }
     }
 }
@@ -202,6 +222,9 @@ fn merge_file(cfg: &mut Config, fc: FileConfig) {
     if let Some(v) = fc.vector.api_key {
         cfg.vector.api_key = Some(v);
     }
+    if let Some(v) = fc.graph.bin {
+        cfg.graph.bin = v;
+    }
     if let Some(v) = fc.behavior.thinking_on {
         cfg.thinking_disabled = !v;
     }
@@ -228,51 +251,180 @@ fn merge_cli(cfg: &mut Config, o: CliOverrides) {
     }
 }
 
-/// 写入口：仅支持 llm.* 三键；未知键报 CS1012。
+/// 配置键表（P005 R7.2 表驱动）：一处声明，apply_set / resolved_get / 未知键提示三处共用。
+/// 加新键 = 在 `config_key_table()` 加一行（此前要改 4-5 处，coupling 审查域4）。
+pub struct ConfigKey {
+    pub name: &'static str,
+    /// 生效配置 → 展示值。
+    pub get: fn(&Config) -> String,
+    /// 文件视图写入（含类型校验）。
+    pub set: fn(&mut FileConfig, String) -> CsResult<()>,
+}
+
+fn parse_typed<T: std::str::FromStr>(key: &str, value: &str) -> CsResult<T>
+where
+    <T as std::str::FromStr>::Err: std::fmt::Display,
+{
+    value
+        .parse::<T>()
+        .map_err(|e| CsError::new(CONFIG_INVALID, format!("{key} 值非法: {value}（{e}）")))
+}
+
+pub fn config_key_table() -> &'static [ConfigKey] {
+    &[
+        ConfigKey {
+            name: "llm.base_url",
+            get: |c| c.llm.base_url.clone(),
+            set: |fc, v| {
+                fc.llm.base_url = Some(v);
+                Ok(())
+            },
+        },
+        ConfigKey {
+            name: "llm.api_key",
+            get: |c| c.llm.api_key.clone().unwrap_or_default(),
+            set: |fc, v| {
+                fc.llm.api_key = Some(v);
+                Ok(())
+            },
+        },
+        ConfigKey {
+            name: "llm.model",
+            get: |c| c.llm.model.clone(),
+            set: |fc, v| {
+                fc.llm.model = Some(v);
+                Ok(())
+            },
+        },
+        ConfigKey {
+            name: "context.model_context_tokens",
+            get: |c| c.context.model_context_tokens.to_string(),
+            set: |fc, v| {
+                fc.context.model_context_tokens =
+                    Some(parse_typed("context.model_context_tokens", &v)?);
+                Ok(())
+            },
+        },
+        ConfigKey {
+            name: "context.compact_at_percent",
+            get: |c| c.context.compact_at_percent.to_string(),
+            set: |fc, v| {
+                fc.context.compact_at_percent =
+                    Some(parse_typed("context.compact_at_percent", &v)?);
+                Ok(())
+            },
+        },
+        ConfigKey {
+            name: "vector.embed_model",
+            get: |c| c.vector.embed_model.clone(),
+            set: |fc, v| {
+                fc.vector.embed_model = Some(v);
+                Ok(())
+            },
+        },
+        ConfigKey {
+            name: "vector.embed_dims",
+            get: |c| c.vector.embed_dims.to_string(),
+            set: |fc, v| {
+                fc.vector.embed_dims = Some(parse_typed("vector.embed_dims", &v)?);
+                Ok(())
+            },
+        },
+        ConfigKey {
+            name: "vector.embed_mode",
+            get: |c| c.vector.embed_mode.clone(),
+            set: |fc, v| {
+                fc.vector.embed_mode = Some(v);
+                Ok(())
+            },
+        },
+        ConfigKey {
+            name: "vector.base_url",
+            // 缺省跟随 [llm].base_url（嵌入专用端点语义，P005 R7.1 同口径）
+            get: |c| {
+                c.vector
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| c.llm.base_url.clone())
+            },
+            set: |fc, v| {
+                fc.vector.base_url = Some(v);
+                Ok(())
+            },
+        },
+        ConfigKey {
+            name: "vector.api_key",
+            get: |c| {
+                c.vector
+                    .api_key
+                    .clone()
+                    .unwrap_or_else(|| c.llm.api_key.clone().unwrap_or_default())
+            },
+            set: |fc, v| {
+                fc.vector.api_key = Some(v);
+                Ok(())
+            },
+        },
+        ConfigKey {
+            name: "vector.repomap_budget",
+            get: |c| c.vector.repomap_budget.to_string(),
+            set: |fc, v| {
+                fc.vector.repomap_budget = Some(parse_typed("vector.repomap_budget", &v)?);
+                Ok(())
+            },
+        },
+        ConfigKey {
+            name: "behavior.thinking_on",
+            get: |c| (!c.thinking_disabled).to_string(),
+            set: |fc, v| {
+                let b = v.parse::<bool>().map_err(|_| {
+                    CsError::new(CONFIG_INVALID, format!("thinking_on 需要布尔: {v}"))
+                        .with_hint("取值: true | false")
+                })?;
+                fc.behavior.thinking_on = Some(b);
+                Ok(())
+            },
+        },
+        ConfigKey {
+            name: "graph.bin",
+            get: |c| c.graph.bin.clone(),
+            set: |fc, v| {
+                fc.graph.bin = Some(v);
+                Ok(())
+            },
+        },
+    ]
+}
+
+/// 键表全名提示（未知键报错的 hint 用）。
+pub fn keys_hint() -> String {
+    config_key_table()
+        .iter()
+        .map(|k| k.name)
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+fn find_key(key: &str) -> CsResult<&'static ConfigKey> {
+    config_key_table()
+        .iter()
+        .find(|k| k.name == key)
+        .ok_or_else(|| {
+            CsError::new(CONFIG_INVALID, format!("未知配置键: {key}"))
+                .with_hint(format!("可用键: {}", keys_hint()))
+        })
+}
+
+/// 写入口：键表驱动（P005 R7.2）；未知键报 CS1012。
 pub fn apply_set(fc: &mut FileConfig, key: &str, value: String) -> CsResult<()> {
-    let slot = match key {
-        "llm.base_url" => &mut fc.llm.base_url,
-        "llm.api_key" => &mut fc.llm.api_key,
-        "llm.model" => &mut fc.llm.model,
-        "vector.embed_model" => &mut fc.vector.embed_model,
-        "vector.embed_mode" => &mut fc.vector.embed_mode,
-        "vector.base_url" => &mut fc.vector.base_url,
-        "vector.api_key" => &mut fc.vector.api_key,
-        "vector.embed_dims" => {
-            let v = value.parse::<u32>().map_err(|e| {
-                CsError::new(
-                    CONFIG_INVALID,
-                    format!("embed_dims 需要正整数: {value}（{e}）"),
-                )
-            })?;
-            fc.vector.embed_dims = Some(v);
-            return Ok(());
-        }
-        "vector.repomap_budget" => {
-            let v = value.parse::<usize>().map_err(|e| {
-                CsError::new(
-                    CONFIG_INVALID,
-                    format!("repomap_budget 需要正整数: {value}（{e}）"),
-                )
-            })?;
-            fc.vector.repomap_budget = Some(v);
-            return Ok(());
-        }
-        "behavior.thinking_on" => {
-            let v = value.parse::<bool>().map_err(|_| {
-                CsError::new(CONFIG_INVALID, format!("thinking_on 需要布尔: {value}"))
-                    .with_hint("取值: true | false")
-            })?;
-            fc.behavior.thinking_on = Some(v);
-            return Ok(());
-        }
-        other => {
-            return Err(CsError::new(CONFIG_INVALID, format!("未知配置键: {other}"))
-                .with_hint("可用键: llm.base_url | llm.api_key | llm.model | vector.embed_model | vector.embed_mode | vector.base_url | vector.api_key | vector.embed_dims | vector.repomap_budget | behavior.thinking_on"));
-        }
-    };
-    *slot = Some(value);
-    Ok(())
+    let k = find_key(key)?;
+    (k.set)(fc, value)
+}
+
+/// 读入口：生效配置按键取展示值（P005 R7.2，与 apply_set 同表）。
+pub fn resolved_get(cfg: &Config, key: &str) -> CsResult<String> {
+    let k = find_key(key)?;
+    Ok((k.get)(cfg))
 }
 
 /// 生效配置 → 文件视图（供 `config get` 展示）。
@@ -295,6 +447,9 @@ pub fn to_file_view(cfg: &Config) -> FileConfig {
         behavior: FileBehavior {
             thinking_on: Some(!cfg.thinking_disabled),
         },
+        graph: FileGraph {
+            bin: Some(cfg.graph.bin.clone()),
+        },
     }
 }
 
@@ -316,6 +471,52 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// P005 R7.2：键表全键 set → 写盘 → load → get 闭环 + 未知键报错。
+    #[test]
+    fn key_table_roundtrip_and_unknown_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let g = dir.path().join("g.toml");
+        let mut fc = FileConfig::default();
+        for k in config_key_table() {
+            (k.set)(&mut fc, sample_value(k.name).to_string()).unwrap();
+        }
+        std::fs::write(&g, toml::to_string_pretty(&fc).unwrap()).unwrap();
+        let cfg = load_layered(Some(&g), None, CliOverrides::default()).unwrap();
+        for k in config_key_table() {
+            let got = resolved_get(&cfg, k.name).unwrap();
+            assert_eq!(got, expected_value(k.name), "键 {} 回读不符", k.name);
+        }
+        // 未知键：set/get 都报 CS1012 且 hint 含全部键名（含新增 context.*/graph.bin）
+        let err = apply_set(&mut fc, "nope.key", "1".into()).unwrap_err();
+        assert_eq!(err.code, CONFIG_INVALID);
+        assert!(err.hint.as_deref().unwrap().contains("graph.bin"));
+        assert!(resolved_get(&cfg, "nope.key").is_err());
+    }
+
+    fn sample_value(name: &str) -> &'static str {
+        match name {
+            "llm.base_url" => "http://set-llm",
+            "llm.api_key" => "sk-set",
+            "llm.model" => "set-model",
+            "context.model_context_tokens" => "500000",
+            "context.compact_at_percent" => "50",
+            "vector.embed_model" => "set-embed",
+            "vector.embed_dims" => "512",
+            "vector.embed_mode" => "raw",
+            "vector.base_url" => "http://set-vec",
+            "vector.api_key" => "sk-vec",
+            "vector.repomap_budget" => "1000",
+            "behavior.thinking_on" => "false",
+            "graph.bin" => "cg-set",
+            _ => unreachable!(),
+        }
+    }
+
+    fn expected_value(name: &str) -> &'static str {
+        // behavior.thinking_on 经 thinking_disabled 取反往返后与原值一致（set false → get false）
+        sample_value(name)
+    }
 
     #[test]
     fn global_home_is_codesleuth_dir() {

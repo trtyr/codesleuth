@@ -13,7 +13,8 @@ async fn codegraph_mcp_lifecycle() {
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fixture-rs");
 
     // 1) 生命周期入口：索引缺失则 init，然后 spawn MCP server + 握手
-    let engine = CodegraphEngine::start(&repo, false)
+    //    （P005 R7.2：可执行名改由配置链传入，此处用默认名）
+    let engine = CodegraphEngine::start(&repo, "codegraph", false)
         .await
         .expect("codegraph 引擎启动失败");
     assert!(

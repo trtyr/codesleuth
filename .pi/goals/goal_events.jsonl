@@ -1,0 +1,11 @@
+{"type":"goal_created","goalId":"muvbq2c9-zfwvub","objective":"完成 P005 R7 结构与易用四件：7.1 嵌入供应商 fallback 去重、7.2 config 键表驱动化（含 context.* 可 set/get、CODEGRAPH_BIN 迁配置文件）、7.3 index --rebuild 交互澄清 + 主循环瘦身可行性评估入档（不动架构）、7.4 日志体系升级（结构化字段 + session id 串线 + 落盘轮转）","sisyphus":false,"autoContinue":true,"at":"2026-10-05T14:07:03.513Z"}
+{"type":"task_list_set","goalId":"muvbq2c9-zfwvub","taskCount":5,"blockCompletion":false,"at":"2026-10-05T14:07:03.513Z"}
+{"type":"task_started","goalId":"muvbq2c9-zfwvub","taskId":"r7-1","at":"2026-10-05T14:07:40.669Z"}
+{"type":"task_started","goalId":"muvbq2c9-zfwvub","taskId":"r7-2","at":"2026-10-05T14:11:01.793Z"}
+{"type":"task_complete","goalId":"muvbq2c9-zfwvub","taskId":"r7-1","evidence":"cli.rs 两处同构块收拢为 resolve_embed_endpoint 单点 + 纯参数化测试 embed_endpoint_fallback_follows_llm（缺省跟随 llm/显式覆盖两向断言）；clippy --all-targets -D warnings 零告警","at":"2026-10-05T14:11:13.713Z"}
+{"type":"task_complete","goalId":"muvbq2c9-zfwvub","taskId":"r7-2","evidence":"config.rs 键表 config_key_table()（13 键含 context.*×2 + graph.bin 新段）；apply_set/resolved_get 同表；CODEGRAPH_BIN env 移除（仅注释提及）；全键 set→load→get 回归测试 key_table_roundtrip_and_unknown_key；108 lib tests 全绿 + clip","at":"2026-10-05T14:21:41.131Z"}
+{"type":"task_started","goalId":"muvbq2c9-zfwvub","taskId":"r7-3","at":"2026-10-05T14:21:41.135Z"}
+{"type":"task_complete","goalId":"muvbq2c9-zfwvub","taskId":"r7-3","evidence":"index_structure_error 诚实化（--rebuild 不再声称已记录）+ 验收测试 index_structure_hint_is_honest 实过；主循环瘦身评估入档 docs/plantree/plans/005/topics/mainloop-slim-assessment.md（结论：保持现状 + 三条重开条件）","at":"2026-10-05T14:25:05.543Z"}
+{"type":"task_started","goalId":"muvbq2c9-zfwvub","taskId":"r7-4","at":"2026-10-05T14:25:05.547Z"}
+{"type":"task_complete","goalId":"muvbq2c9-zfwvub","taskId":"r7-4","evidence":"logs.rs：SessionLog 落盘+单代轮转（open_rotates_oversized_log/open_keeps_small_log_and_appends 单测）；session_id 串线单测（Capture writer 实测 fmt 输出 session_id=\"abc123\"）；harness llm_turn/tool_exec 结构化字段 + 五处降级带 compon","at":"2026-10-05T14:35:50.816Z"}
+{"type":"task_started","goalId":"muvbq2c9-zfwvub","taskId":"r7-5","at":"2026-10-05T14:35:50.824Z"}

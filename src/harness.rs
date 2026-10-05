@@ -342,6 +342,8 @@ impl Harness {
                     "tool_call",
                     &serde_json::json!({"turn": turns, "name": call.name, "args": args}),
                 )?;
+                // P005 R7.4：关键路径结构化日志（session span 携带 session_id）
+                tracing::debug!(turns, tool = %call.name, audit_seq = seq, "tool_exec");
                 // read 的精确路径要在 execute 消耗 args 之前摘出（FINDING-010 存证用）
                 let read_exact_path = if call.name == "read" {
                     args.get("path").and_then(Value::as_str).map(str::to_string)

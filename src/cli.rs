@@ -65,10 +65,10 @@ pub enum Command {
     Index {
         /// 目标仓库路径
         path: PathBuf,
-        /// 强制重建索引
+        /// 结构索引重建提示（实际入口：run --fresh-index；本旗标不单独记录状态）
         #[arg(long)]
         rebuild: bool,
-        /// 构建向量索引（嵌入 + 关系感知描述，P003）
+        /// 构建向量索引（嵌入 + text_hash 增量）
         #[arg(long)]
         vector: bool,
     },
@@ -83,7 +83,7 @@ pub enum ConfigAction {
     },
     /// 写入全局配置
     Set {
-        /// 键（llm.base_url | llm.api_key | llm.model | vector.* | behavior.thinking_on）
+        /// 配置键（全集见未知键提示或 config get；llm.* | context.* | vector.* | behavior.thinking_on | graph.bin）
         key: String,
         /// 值
         value: String,
@@ -93,7 +93,9 @@ pub enum ConfigAction {
 }
 
 impl Cli {
-    pub fn run(self) -> i32 {
+    pub fn run(self, session_id: &str) -> i32 {
+        // P005 R7.4：session span——run 全程事件自动携带 session_id（结构化串线）
+        let _session = tracing::info_span!("session", session_id = %session_id).entered();
         let overrides = CliOverrides {
             base_url: self.base_url.clone(),
             model: self.model.clone(),
@@ -114,20 +116,12 @@ impl Cli {
                         }
                     }
                 } else {
-                    let e = CsError::new(
-                        INDEX_NOT_AVAILABLE,
-                        format!("结构索引由 codegraph 按需自建：{}", path.display()),
-                    )
-                    .with_hint(if rebuild {
-                        "--rebuild 已记录：run 时可用 --fresh-index 触发".to_string()
-                    } else {
-                        "向量索引请加 --vector".to_string()
-                    });
+                    let e = index_structure_error(rebuild);
                     report_error(&e);
                     e.exit_code()
                 }
             }
-            None => self.run_task(),
+            None => self.run_task(session_id),
         }
     }
 
@@ -141,18 +135,13 @@ impl Cli {
         })?;
         let cfg = config::load(overrides.clone())?;
         let api_key = cfg.resolve_api_key()?;
-        // 嵌入可用独立供应商：[vector] base_url/api_key 缺省时跟随 [llm]
-        let embed_base = cfg
-            .vector
-            .base_url
-            .clone()
-            .unwrap_or_else(|| cfg.llm.base_url.clone());
-        // P005 R6.1：api_key 已由 resolve_api_key 校验非空，or_else 恒 Some——原 None 分支不可达（死代码删除）
-        let embed_key = cfg
-            .vector
-            .api_key
-            .clone()
-            .unwrap_or_else(|| api_key.clone());
+        // 嵌入可用独立供应商：[vector] base_url/api_key 缺省时跟随 [llm]（P005 R7.1 去重）
+        let (embed_base, embed_key) = resolve_embed_endpoint(
+            cfg.vector.base_url.clone(),
+            cfg.vector.api_key.clone(),
+            &cfg.llm.base_url,
+            &api_key,
+        );
         let mode = match cfg.vector.embed_mode.as_str() {
             "raw" => vector::EmbedMode::Raw,
             _ => vector::EmbedMode::Composite,
@@ -188,8 +177,8 @@ impl Cli {
         Ok(())
     }
 
-    fn run_task(self) -> i32 {
-        match self.run_task_inner() {
+    fn run_task(self, session_id: &str) -> i32 {
+        match self.run_task_inner(session_id) {
             Ok(()) => 0,
             Err(e) => {
                 report_error(&e);
@@ -198,7 +187,7 @@ impl Cli {
         }
     }
 
-    fn run_task_inner(self) -> CsResult<()> {
+    fn run_task_inner(self, session_id: &str) -> CsResult<()> {
         let task = self
             .task
             .clone()
@@ -234,10 +223,10 @@ impl Cli {
         );
 
         // 状态目录 + 会话：全局产物落 ~/.codesleuth/（用户拍板归位），目标仓库除 .codesleuth/ 索引外零写入
+        // P005 R7.4：session id 由入口（main）传入——日志串线与审计同一身份
         let state_dir = crate::config::global_state_dir()
             .ok_or_else(|| CsError::new(CONFIG_MISSING, "找不到 HOME（无法定位 ~/.codesleuth）"))?;
-        let session_id = audit::new_session_id();
-        let audit_log = audit::Audit::create(&state_dir, &session_id)?;
+        let audit_log = audit::Audit::create(&state_dir, session_id)?;
 
         let provider: llm::SharedProvider = Arc::new(llm::OpenAiProvider::new(
             &cfg.llm.base_url,
@@ -261,7 +250,7 @@ impl Cli {
         let rt = tokio::runtime::Runtime::new()
             .map_err(|e| CsError::new(INTERNAL, format!("tokio runtime 启动失败: {e}")))?;
         let cg: Option<Arc<tools::graph::CodegraphEngine>> = match rt.block_on(
-            tools::graph::CodegraphEngine::start(&repo_abs, self.fresh_index),
+            tools::graph::CodegraphEngine::start(&repo_abs, &cfg.graph.bin, self.fresh_index),
         ) {
             Ok(engine) => {
                 tracing::debug!("# codegraph MCP ready（explore/callers/callees/impact/files）");
@@ -272,7 +261,7 @@ impl Cli {
                 return Err(e);
             }
             Err(e) => {
-                tracing::warn!("codegraph 未就绪（结构工具降级，其余继续）: {e}");
+                tracing::warn!(component = "codegraph", error = %e, "codegraph 未就绪，结构工具降级（其余继续）");
                 // P005 R5.2：非致命降级进审计留痕（最佳 effort，不留痕失败不掩主流程）
                 let _ = audit_log.record(
                     "degraded",
@@ -328,7 +317,7 @@ impl Cli {
                     return Err(e);
                 }
                 Err(e) => {
-                    tracing::warn!("向量层装配失败（本会话无召回层，任务继续）: {e}");
+                    tracing::warn!(component = "vector_layer", error = %e, "向量层装配失败（本会话无召回层，任务继续）");
                     // P005 R5.2：非致命降级进审计留痕
                     let _ = audit_log.record(
                         "degraded",
@@ -351,7 +340,7 @@ impl Cli {
                     first_suffix = Some(vector::repomap::wrap_repo_section(&map));
                 }
                 Err(e) => {
-                    tracing::warn!("导航图构建失败（跳过注入）: {e}");
+                    tracing::warn!(component = "repo_map", error = %e, "导航图构建失败（跳过注入）");
                     // P005 R5.2：非致命降级进审计留痕
                     let _ = audit_log.record(
                         "degraded",
@@ -467,6 +456,21 @@ impl Cli {
     }
 }
 
+/// `index` 子命令非 --vector 的诚实报错（P005 R7.3 交互澄清）：
+/// 结构索引由 codegraph 在 run 时按需自建，--rebuild 从不「记录」任何状态——
+/// 重建的唯一入口是 run --fresh-index。原「--rebuild 已记录」是不实描述，删除。
+fn index_structure_error(rebuild: bool) -> CsError {
+    CsError::new(
+        INDEX_NOT_AVAILABLE,
+        "index 子命令仅支持 --vector（结构索引由 codegraph 在 run 时按需自建）",
+    )
+    .with_hint(if rebuild {
+        "结构索引重建：codesleuth run --fresh-index（--rebuild 不单独记录状态）".to_string()
+    } else {
+        "向量索引请加 --vector".to_string()
+    })
+}
+
 fn run_config(action: ConfigAction) -> i32 {
     match action {
         ConfigAction::Path => {
@@ -511,6 +515,20 @@ struct VectorLayerCtx<'a> {
     audit: &'a audit::Audit,
 }
 
+/// 嵌入供应商解析（P005 R7.1，coupling 审查去重）：[vector].base_url/api_key 缺省跟随 [llm]。
+/// 返回 (base_url, api_key)；llm 层密钥由 resolve_api_key 保证非空，此处不再设防。
+fn resolve_embed_endpoint(
+    vector_base: Option<String>,
+    vector_key: Option<String>,
+    llm_base: &str,
+    llm_key: &str,
+) -> (String, String) {
+    (
+        vector_base.unwrap_or_else(|| llm_base.to_string()),
+        vector_key.unwrap_or_else(|| llm_key.to_string()),
+    )
+}
+
 /// 向量层装配：补建索引 → 开库 → 注册 vector_search → 召回暖启动 + 任务导航图。
 /// 返回注入首条消息的后缀（召回块 + 导航图）；向量不可用时 Ok(None)（弹性降级，不致命）。
 fn setup_vector_layer(
@@ -523,26 +541,13 @@ fn setup_vector_layer(
         "raw" => vector::EmbedMode::Raw,
         _ => vector::EmbedMode::Composite,
     };
-    // 嵌入可用独立供应商：[vector] base_url/api_key 缺省时跟随 [llm]（FINDING-013 前瞻）
-    let embed_base = cfg
-        .vector
-        .base_url
-        .clone()
-        .unwrap_or_else(|| cfg.llm.base_url.clone());
-    let embed_key = match cfg
-        .vector
-        .api_key
-        .clone()
-        .or_else(|| Some(ctx.api_key.to_string()))
-    {
-        Some(k) => k,
-        None => {
-            return Err(CsError::new(
-                crate::errors::USER_INPUT,
-                "嵌入密钥缺失：[vector].api_key 与 [llm].api_key 均未配置",
-            ));
-        }
-    };
+    // 嵌入可用独立供应商：[vector] base_url/api_key 缺省时跟随 [llm]（P005 R7.1 去重）
+    let (embed_base, embed_key) = resolve_embed_endpoint(
+        cfg.vector.base_url.clone(),
+        cfg.vector.api_key.clone(),
+        &cfg.llm.base_url,
+        ctx.api_key,
+    );
     let embed = vector::EmbedClient::new(
         &embed_base,
         &embed_key,
@@ -568,7 +573,7 @@ fn setup_vector_layer(
             report.chunks_total, report.embedded, report.reused, report.gc_removed
         ),
         Err(e) => {
-            tracing::warn!("向量索引构建失败（降级：尝试复用已有索引）: {e}");
+            tracing::warn!(component = "vector_build", error = %e, "向量索引构建失败（降级：尝试复用已有索引）");
             // P005 R5.2：非致命降级进审计留痕（best-effort）
             let _ = ctx.audit.record(
                 "degraded",
@@ -596,7 +601,7 @@ fn setup_vector_layer(
     let hits = match ctx.rt.block_on(recall.recall(ctx.task, 10)) {
         Ok(h) => h,
         Err(e) => {
-            tracing::warn!("召回失败（跳过注入）: {e}");
+            tracing::warn!(component = "recall", error = %e, "召回失败（跳过注入）");
             // P005 R5.2：非致命降级进审计留痕（best-effort）
             let _ = ctx.audit.record(
                 "degraded",
@@ -658,24 +663,8 @@ fn config_get(key: Option<String>) -> CsResult<String> {
     match key.as_deref() {
         None => toml::to_string_pretty(&config::to_file_view(&cfg))
             .map_err(|e| CsError::new(INTERNAL, format!("序列化失败: {e}"))),
-        Some("llm.base_url") => Ok(cfg.llm.base_url.clone()),
-        Some("llm.api_key") => Ok(cfg.llm.api_key.clone().unwrap_or_default()),
-        Some("llm.model") => Ok(cfg.llm.model.clone()),
-        Some("vector.embed_model") => Ok(cfg.vector.embed_model.clone()),
-        Some("vector.embed_dims") => Ok(cfg.vector.embed_dims.to_string()),
-        Some("vector.embed_mode") => Ok(cfg.vector.embed_mode.clone()),
-        Some("vector.base_url") => {
-            Ok(cfg.vector.base_url.clone().unwrap_or_else(|| cfg.llm.base_url.clone()))
-        }
-        Some("vector.api_key") => Ok(cfg
-            .vector
-            .api_key
-            .clone()
-            .unwrap_or_else(|| cfg.llm.api_key.clone().unwrap_or_default())),
-        Some("vector.repomap_budget") => Ok(cfg.vector.repomap_budget.to_string()),
-        Some("behavior.thinking_on") => Ok((!cfg.thinking_disabled).to_string()),
-        Some(other) => Err(CsError::new(CONFIG_INVALID, format!("未知配置键: {other}"))
-            .with_hint("可用键: llm.base_url | llm.api_key | llm.model | vector.embed_model | vector.embed_dims | vector.embed_mode | vector.base_url | vector.api_key | vector.repomap_budget | behavior.thinking_on")),
+        // P005 R7.2：键表驱动，与 config set 同表（context.* 等 13 键全可读）
+        Some(k) => config::resolved_get(&cfg, k),
     }
 }
 
@@ -706,6 +695,32 @@ fn config_set(key: String, value: String) -> CsResult<PathBuf> {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    /// P005 R7.3：index 非 --vector 的报错必须诚实——不再声称「--rebuild 已记录」。
+    #[test]
+    fn index_structure_hint_is_honest() {
+        let e = index_structure_error(true);
+        assert!(e.to_string().contains("仅支持 --vector"));
+        let hint = e.hint.as_deref().unwrap();
+        assert!(hint.contains("--fresh-index"));
+        assert!(!hint.contains("已记录"), "不许再撒谎: {hint}");
+        let e2 = index_structure_error(false);
+        assert!(e2.hint.as_deref().unwrap().contains("--vector"));
+    }
+
+    /// P005 R7.1：嵌入供应商缺省跟随 [llm]，显式 [vector] 覆盖优先。
+    #[test]
+    fn embed_endpoint_fallback_follows_llm() {
+        let (b, k) = resolve_embed_endpoint(None, None, "https://llm", "llm-key");
+        assert_eq!((b.as_str(), k.as_str()), ("https://llm", "llm-key"));
+        let (b, k) = resolve_embed_endpoint(
+            Some("https://vec".into()),
+            Some("vec-key".into()),
+            "https://llm",
+            "llm-key",
+        );
+        assert_eq!((b.as_str(), k.as_str()), ("https://vec", "vec-key"));
+    }
 
     #[test]
     fn cli_definition_valid() {
@@ -774,7 +789,7 @@ mod tests {
     #[test]
     fn missing_task_is_usage_error_exit_1() {
         let cli = Cli::try_parse_from(["codesleuth"]).unwrap();
-        let err = cli.run_task_inner().unwrap_err();
+        let err = cli.run_task_inner("").unwrap_err();
         assert_eq!(err.code, USER_INPUT);
         assert_eq!(err.exit_code(), 1);
     }

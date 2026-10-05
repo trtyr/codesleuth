@@ -67,10 +67,9 @@ async fn run_cli(bin: &str, args: &[&str], cwd: &Path) -> CsResult<()> {
 }
 
 impl CodegraphEngine {
-    /// 生命周期入口（D011）。
-    pub async fn start(root: &Path, force_reindex: bool) -> CsResult<Self> {
-        let bin = std::env::var("CODEGRAPH_BIN").unwrap_or_else(|_| "codegraph".to_string());
-        Self::start_with_bin(root, &bin, force_reindex).await
+    /// 生命周期入口（D011；P005 R7.2：可执行名由配置链传入，CODEGRAPH_BIN env 已移除）。
+    pub async fn start(root: &Path, bin: &str, force_reindex: bool) -> CsResult<Self> {
+        Self::start_with_bin(root, bin, force_reindex).await
     }
 
     async fn start_with_bin(root: &Path, bin: &str, force_reindex: bool) -> CsResult<Self> {
