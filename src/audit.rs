@@ -127,11 +127,13 @@ impl Audit {
                 line.insert(k.clone(), v.clone());
             }
         }
+        let mut f = self.file.lock().expect("audit lock");
+        // 取号必须在锁内（P004 T2.4）：锁外取号并发时会先取号者后写盘，
+        // JSONL 的「按 seq 单调」不变量即破。锁内取号+写入原子成对。
         let n = self.seq.fetch_add(1, Ordering::SeqCst) + 1;
         line.insert("seq".into(), serde_json::json!(n));
         line.insert("ts_ms".into(), serde_json::json!(now_ms()));
         line.insert("kind".into(), serde_json::json!(kind));
-        let mut f = self.file.lock().expect("audit lock");
         writeln!(
             f,
             "{}",

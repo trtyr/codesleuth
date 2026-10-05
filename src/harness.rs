@@ -202,6 +202,9 @@ impl Harness {
                 content: resp.text.clone(),
                 tool_calls: resp.tool_calls.clone(),
             });
+            // 本轮有真实工具调用 = 模型在工作，prose 计数归零（否则下一轮 prose 直接被降级，
+            // 剥夺了引导 submit_report 的机会——P004 T2.2）
+            prose_streak = 0;
 
             for call in &resp.tool_calls {
                 // 0) submit_report：收敛通道（不走去重——被拒后允许修正重提）
@@ -384,10 +387,16 @@ impl Harness {
                         }
                     }
                     Err(e) => {
+                        // 工具执行错误也是无进展步（P004 T2.1）：否则坏模型可用千变参数无限触发
+                        // 错误空转，永远不触熔断。错误回显给模型后照常计熔断。
+                        no_progress += 1;
                         messages.push(ChatMessage::Tool {
                             call_id: call.id.clone(),
                             content: format!("工具错误: {e}"),
                         });
+                        if let Some(fuse) = fuse_if_hit(no_progress, &self.audit)? {
+                            return Err(fuse);
+                        }
                     }
                 }
             }
@@ -738,6 +747,23 @@ mod tests {
         }
     }
 
+    struct AlwaysErr;
+    #[async_trait::async_trait]
+    impl Tool for AlwaysErr {
+        fn name(&self) -> &'static str {
+            "always_err"
+        }
+        fn description(&self) -> String {
+            "always fails".into()
+        }
+        fn parameters(&self) -> Value {
+            serde_json::json!({"type": "object"})
+        }
+        async fn execute(&self, _args: Value) -> CsResult<String> {
+            Err(CsError::new(crate::errors::USER_INPUT, "boom"))
+        }
+    }
+
     fn resp_text(s: &str) -> ChatResponse {
         ChatResponse {
             text: Some(s.into()),
@@ -844,6 +870,58 @@ mod tests {
         let err = res.unwrap_err();
         assert_eq!(err.code, LLM_FUSE);
         assert_eq!(err.exit_code(), 3);
+    }
+
+    #[tokio::test]
+    async fn tool_errors_count_toward_no_progress_fuse() {
+        // P004 T2.1 回归：千变参数的错误调用也必须计入熔断（旧实现完全不计数，可无限空转烧钱）
+        let mut reg = ToolRegistry::new();
+        reg.register(Box::new(AlwaysErr));
+        let script: Vec<_> = (0..5)
+            .map(|i| resp_call(&format!("e{i}"), "always_err", &format!(r#"{{"n":{i}}}"#)))
+            .chain(std::iter::once(resp_text("never")))
+            .collect();
+        let (res, _seen, _dir) = run_with(script, reg).await;
+        let err = res.unwrap_err();
+        assert_eq!(err.code, LLM_FUSE);
+    }
+
+    #[tokio::test]
+    async fn prose_streak_resets_on_tool_turns() {
+        // P004 T2.2 回归：工具轮之后 prose 计数归零——下一轮 prose 必须重新获得
+        // submit_report 引导机会，而不是被旧计数直接降级。
+        let calls = Arc::new(Mutex::new(0u32));
+        let mut reg = ToolRegistry::new();
+        reg.register(Box::new(Echo {
+            calls: calls.clone(),
+            output: "found in src/retry.rs".into(),
+        }));
+        let (res, seen, _dir) = run_with(
+            vec![
+                resp_text("先说一句"),         // prose 1 → 引导
+                resp_call("t1", "echo", "{}"), // 工具轮 → 计数归零
+                resp_text("又说一句"),         // prose → 必须再次引导（旧实现直接降级）
+                resp_text("再摆烂"),           // prose 2 → 此时才降级
+            ],
+            reg,
+        )
+        .await;
+        let out = res.unwrap();
+        assert!(out.report.degraded); // 两次摆烂后最终降级 ✓
+        let steers = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| {
+                r.messages.iter().any(|m| {
+                    matches!(m, ChatMessage::User { content } if content.contains("submit_report"))
+                })
+            })
+            .count();
+        assert!(
+            steers >= 2,
+            "工具轮之后必须重新引导（实际引导 {steers} 次）"
+        );
     }
 
     #[tokio::test]

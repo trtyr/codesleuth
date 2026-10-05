@@ -34,6 +34,7 @@ pub const KEPT_KINDS: &[&str] = &[
 pub const SKIP_DIRS: &[&str] = &[
     ".git",
     ".codegraph",
+    ".codesleuth", // 本工具自己的项目级索引目录（P004 T2.3，与 writeguard 对齐）
     "target",
     "node_modules",
     "dist",
