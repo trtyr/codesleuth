@@ -157,10 +157,15 @@ def main(argv=None) -> int:
             print("judge 需要 ~/.codesleuth/config.toml 的 [llm] api_key（或使用 --no-judge）")
             return scorecard.EXIT_USAGE
         judge_cfg = {
-            "base_url": args.base_url,
+            # P005 补遗：文档承诺「缺省取 config.toml」但实现直取空 flag——本次首次兑现承诺，
+            # 否则 base_url 为空时 judge 首题即崩（unknown url type: '/chat/completions'）
+            "base_url": args.base_url or cfg.get("base_url", ""),
             "api_key": api_key,
-            "model": args.judge_model or "gpt-4o-mini",
+            "model": args.judge_model or cfg.get("model", "gpt-4o-mini"),
         }
+        if not judge_cfg["base_url"]:
+            print("judge 需要 base_url：~/.codesleuth/config.toml 的 [llm].base_url 或 --base-url 旗标")
+            return scorecard.EXIT_USAGE
 
     suites = []
     for golden, fixture_dir in zip(goldens, fixture_dirs):
