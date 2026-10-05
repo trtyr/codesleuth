@@ -146,11 +146,7 @@ impl Cli {
             .base_url
             .clone()
             .unwrap_or_else(|| cfg.llm.base_url.clone());
-        let embed_key = cfg
-            .vector
-            .api_key
-            .clone()
-            .or_else(|| Some(api_key.clone()));
+        let embed_key = cfg.vector.api_key.clone().or_else(|| Some(api_key.clone()));
         let mode = match cfg.vector.embed_mode.as_str() {
             "raw" => vector::EmbedMode::Raw,
             _ => vector::EmbedMode::Composite,
@@ -232,13 +228,12 @@ impl Cli {
         let ledger =
             audit::Ledger::load(state_dir.join("ledger").join(format!("{session_id}.json")));
 
-        let provider: llm::SharedProvider =
-            Arc::new(llm::OpenAiProvider::new(
-                &cfg.llm.base_url,
-                &api_key,
-                2,
-                cfg.thinking_disabled,
-            ));
+        let provider: llm::SharedProvider = Arc::new(llm::OpenAiProvider::new(
+            &cfg.llm.base_url,
+            &api_key,
+            2,
+            cfg.thinking_disabled,
+        ));
 
         // 层进 v0（Phase 2）：读层 + 模糊层
         let fence = Arc::new(fence::Fence::new(&repo_abs)?);
@@ -303,11 +298,7 @@ impl Cli {
                 .base_url
                 .clone()
                 .unwrap_or_else(|| cfg.llm.base_url.clone());
-            let embed_key = cfg
-                .vector
-                .api_key
-                .clone()
-                .or_else(|| Some(api_key.clone()));
+            let embed_key = cfg.vector.api_key.clone().or_else(|| Some(api_key.clone()));
             let embed = vector::EmbedClient::new(
                 &embed_base,
                 embed_key.as_deref().expect("嵌入密钥缺失"),
@@ -329,7 +320,10 @@ impl Cli {
                     tracing::warn!("向量索引构建失败（降级：尝试复用已有索引）: {e}");
                 }
             }
-            let idx = vector::store::index_path(&vector::store::project_index_dir(&repo_abs), &vector::store::fingerprint(&repo_abs));
+            let idx = vector::store::index_path(
+                &vector::store::project_index_dir(&repo_abs),
+                &vector::store::fingerprint(&repo_abs),
+            );
             match vector::VectorStore::open(&idx) {
                 Ok(store) => {
                     let recall = Arc::new(vector::RecallEngine::open(store, embed)?);
@@ -553,7 +547,7 @@ fn config_get(key: Option<String>) -> CsResult<String> {
         None => toml::to_string_pretty(&config::to_file_view(&cfg))
             .map_err(|e| CsError::new(INTERNAL, format!("序列化失败: {e}"))),
         Some("llm.base_url") => Ok(cfg.llm.base_url.clone()),
-                Some("llm.model") => Ok(cfg.llm.model.clone()),
+        Some("llm.model") => Ok(cfg.llm.model.clone()),
         Some(other) => Err(CsError::new(CONFIG_INVALID, format!("未知配置键: {other}"))
             .with_hint("可用键: llm.base_url | llm.api_key | llm.model")),
     }

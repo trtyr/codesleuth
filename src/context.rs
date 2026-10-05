@@ -64,6 +64,12 @@ pub fn compact(
     let head = 2.min(total); // system + task
     let tail = keep_recent.min(total.saturating_sub(head));
     let evict_end = total.saturating_sub(tail);
+    // 消息对感知（P004 T1.2）：裁剪边界若落在 tool 消息上，其 assistant(tool_calls) 搭档
+    // 即将被驱逐——边界回退把整对留在保留侧，否则下游 API 以 400 拒收孤儿 tool 消息。
+    let mut evict_end = evict_end;
+    while evict_end > head && matches!(messages[evict_end], ChatMessage::Tool { .. }) {
+        evict_end -= 1;
+    }
     let evicted_count = evict_end.saturating_sub(head);
     if evicted_count == 0 {
         return (messages, Compaction { evicted_count: 0 });
@@ -146,6 +152,41 @@ mod tests {
         let (out, info) = compact(msgs.clone(), "handoff".into(), 6);
         assert_eq!(info.evicted_count, 0);
         assert_eq!(out, msgs);
+    }
+
+    #[test]
+    fn compact_never_splits_tool_call_pair() {
+        // P004 T1.2 回归：裁剪边界恰好落在 tool 消息上时，其 assistant(tool_calls) 搭档
+        // 不能被驱逐——旧实现会把 pair 拆散，下游 API 以 400 拒收孤儿 tool 消息。
+        let mut msgs = vec![user("SYSTEM"), user("TASK")];
+        for i in 0..8 {
+            msgs.push(big_user(&format!("m{i} ")));
+        }
+        // 让边界正好切在 assistant 与它的 tool 结果之间：尾部倒数第 2 条是 assistant(tool_calls)，
+        // 最后一条是它的 tool 结果，keep_recent=1 时旧实现会把 tool 单独留在保留侧。
+        msgs.push(ChatMessage::Assistant {
+            content: None,
+            tool_calls: vec![ToolCallSpec {
+                id: "call-1".into(),
+                name: "read".into(),
+                arguments: "{}".into(),
+            }],
+        });
+        msgs.push(ChatMessage::Tool {
+            call_id: "call-1".into(),
+            content: "file content".into(),
+        });
+        let (out, info) = compact(msgs, "handoff".into(), 1);
+        // 保留侧尾部：assistant 与 tool 必须同在，且 tool 不能是保留区第一条（孤儿）
+        let tail_has_pair = out.windows(2).any(|w| {
+            matches!(&w[0], ChatMessage::Assistant { tool_calls, .. } if !tool_calls.is_empty())
+                && matches!(&w[1], ChatMessage::Tool { .. })
+        });
+        assert!(tail_has_pair, "tool 调用对必须整对存活");
+        if let Some(ChatMessage::Tool { .. }) = out.first() {
+            panic!("保留区不得以孤儿 tool 消息开头");
+        }
+        assert!(info.evicted_count > 0);
     }
 
     #[test]

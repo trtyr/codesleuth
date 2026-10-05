@@ -220,7 +220,10 @@ mod tests {
         // 2026-10-05 用户硬要求「暖启动零负担」：千级向量走精确暴力（MIN_HNSW_SIZE=100k），
         // 会话启动零 HNSW 重建成本；墓碑语义在暴力路径下同样成立。
         let (_dir, mut engine) = engine_for(16, 1200);
-        assert!(engine.hnsw.is_none(), "千级向量应走精确暴力（暖启动零负担）");
+        assert!(
+            engine.hnsw.is_none(),
+            "千级向量应走精确暴力（暖启动零负担）"
+        );
         let qv = hot_query(16, 9);
         let hits = engine.recall_by_vector(&qv, 5);
         assert!(!hits.is_empty());

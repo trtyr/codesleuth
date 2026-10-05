@@ -75,8 +75,14 @@ pub fn build_task_map(
         .collect();
     let mut entries: Vec<&MapSymbol> = symbols.iter().collect();
     entries.sort_by(|a, b| {
-        let ra = seed_rank.get(a.name.as_str()).copied().unwrap_or(usize::MAX);
-        let rb = seed_rank.get(b.name.as_str()).copied().unwrap_or(usize::MAX);
+        let ra = seed_rank
+            .get(a.name.as_str())
+            .copied()
+            .unwrap_or(usize::MAX);
+        let rb = seed_rank
+            .get(b.name.as_str())
+            .copied()
+            .unwrap_or(usize::MAX);
         let da = degrees.get(&a.id).copied().unwrap_or(0);
         let db = degrees.get(&b.id).copied().unwrap_or(0);
         ra.cmp(&rb)
@@ -205,14 +211,23 @@ mod tests {
             &neighbors,
         );
         let lines: Vec<&str> = map.lines().collect();
-        assert!(lines[0].contains("hot_target") && lines[0].contains("◈"), "种子第一行带◈: {map}");
-        assert!(lines[1].contains("its_caller") && lines[1].contains("◇"), "邻居第二行带◇: {map}");
+        assert!(
+            lines[0].contains("hot_target") && lines[0].contains("◈"),
+            "种子第一行带◈: {map}"
+        );
+        assert!(
+            lines[1].contains("its_caller") && lines[1].contains("◇"),
+            "邻居第二行带◇: {map}"
+        );
         assert!(lines[2].contains("unrelated_big"), "度数填充殿后: {map}");
     }
 
     #[test]
     fn task_map_empty_seeds_equals_global() {
-        let symbols = vec![sym("a", "zeta", "src/a.rs", 1), sym("b", "alpha", "src/b.rs", 1)];
+        let symbols = vec![
+            sym("a", "zeta", "src/a.rs", 1),
+            sym("b", "alpha", "src/b.rs", 1),
+        ];
         let mut degrees = HashMap::new();
         degrees.insert("b".to_string(), 7);
         let empty = std::collections::HashSet::new();

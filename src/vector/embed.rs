@@ -94,9 +94,10 @@ impl EmbedClient {
         let sem = Arc::new(Semaphore::new(EMBED_CONCURRENCY));
         let mut set = tokio::task::JoinSet::new();
         for (bi, (start, end)) in batches.into_iter().enumerate() {
-            let permit = Arc::clone(&sem).acquire_owned().await.map_err(|e| {
-                CsError::new(INDEX_EMBED_FAILED, format!("嵌入信号量失败: {e}"))
-            })?;
+            let permit = Arc::clone(&sem)
+                .acquire_owned()
+                .await
+                .map_err(|e| CsError::new(INDEX_EMBED_FAILED, format!("嵌入信号量失败: {e}")))?;
             let this = self.clone();
             let batch: Vec<String> = texts[start..end].to_vec();
             set.spawn(async move {

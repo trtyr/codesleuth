@@ -6,7 +6,6 @@ use crate::errors::{CONFIG_INVALID, CONFIG_MISSING, CsError, CsResult};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-
 /// 配置文件形态（全部 Option，缺席 = 不覆盖）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct FileConfig {
@@ -220,7 +219,6 @@ fn merge_file(cfg: &mut Config, fc: FileConfig) {
     }
 }
 
-
 fn merge_cli(cfg: &mut Config, o: CliOverrides) {
     if let Some(v) = o.base_url {
         cfg.llm.base_url = v;
@@ -279,9 +277,8 @@ impl Config {
             return Ok(k.clone());
         }
         Err({
-            CsError::new(CONFIG_MISSING, "API key 未找到").with_hint(
-                "在 ~/.codesleuth/config.toml 的 [llm] 段配置 api_key = \"...\" 后重试",
-            )
+            CsError::new(CONFIG_MISSING, "API key 未找到")
+                .with_hint("在 ~/.codesleuth/config.toml 的 [llm] 段配置 api_key = \"...\" 后重试")
         })
     }
 }
@@ -293,7 +290,10 @@ mod tests {
     #[test]
     fn global_home_is_codesleuth_dir() {
         let p = global_config_path().unwrap();
-        assert!(p.to_string_lossy().contains(".codesleuth"), "全局配置应在 ~/.codesleuth/ 下: {p:?}");
+        assert!(
+            p.to_string_lossy().contains(".codesleuth"),
+            "全局配置应在 ~/.codesleuth/ 下: {p:?}"
+        );
         assert!(p.ends_with("config.toml"));
         let d = global_state_dir().unwrap();
         assert!(d.to_string_lossy().contains(".codesleuth"));
@@ -340,7 +340,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let g = dir.path().join("g.toml");
         let pr = dir.path().join("p.toml");
-        write(&g, "[vector]\nembed_model = \"global-model\"\nembed_dims = 512\n");
+        write(
+            &g,
+            "[vector]\nembed_model = \"global-model\"\nembed_dims = 512\n",
+        );
         write(&pr, "[vector]\nembed_model = \"project-model\"\n");
         let cfg = load_layered(Some(&g), Some(&pr), CliOverrides::default()).unwrap();
         assert_eq!(cfg.vector.embed_model, "project-model", "项目配置压全局");
@@ -353,7 +356,10 @@ mod tests {
         let p = dir.path().join("c.toml");
         write(&p, "[behavior]\nthinking_on = true\n");
         let cfg = load_layered(None, Some(&p), CliOverrides::default()).unwrap();
-        assert!(!cfg.thinking_disabled, "配置文件 thinking_on = true 应开回思考");
+        assert!(
+            !cfg.thinking_disabled,
+            "配置文件 thinking_on = true 应开回思考"
+        );
     }
 
     #[test]

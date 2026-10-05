@@ -1,16 +1,14 @@
 //! LLM provider 抽象（Q001/D009）：OpenAI 兼容协议，async-openai + 自定义 base_url。
 //! 重试/退避在本层做；最终失败后 retryable=false（宿主不再重试）。
 
-use crate::errors::{
-    CsError, CsResult, LLM_BAD_RESPONSE, LLM_RATE_LIMITED, LLM_UNREACHABLE,
-};
+use crate::errors::{CsError, CsResult, LLM_BAD_RESPONSE, LLM_RATE_LIMITED, LLM_UNREACHABLE};
 use async_openai::types::chat::{
-        ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls,
-        ChatCompletionRequestAssistantMessage, ChatCompletionRequestMessage,
-        ChatCompletionRequestSystemMessage, ChatCompletionRequestToolMessage,
-        ChatCompletionRequestUserMessage, ChatCompletionTool, ChatCompletionTools,
-        CreateChatCompletionRequest, CreateChatCompletionRequestArgs, CreateChatCompletionResponse,
-        FunctionCall, FunctionObject,
+    ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls,
+    ChatCompletionRequestAssistantMessage, ChatCompletionRequestMessage,
+    ChatCompletionRequestSystemMessage, ChatCompletionRequestToolMessage,
+    ChatCompletionRequestUserMessage, ChatCompletionTool, ChatCompletionTools,
+    CreateChatCompletionRequest, CreateChatCompletionRequestArgs, CreateChatCompletionResponse,
+    FunctionCall, FunctionObject,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -182,8 +180,6 @@ fn to_request_message(m: &ChatMessage) -> ChatCompletionRequestMessage {
     }
 }
 
-
-
 fn map_response(resp: CreateChatCompletionResponse) -> CsResult<ChatResponse> {
     let mut choices = resp.choices;
     let choice = choices
@@ -253,13 +249,13 @@ impl LlmProvider for OpenAiProvider {
                         let ce = if status.as_u16() == 429 || status.is_server_error() {
                             CsError::new(
                                 LLM_RATE_LIMITED,
-                                format!("LLM HTTP {status}: {}", &snippet[..snippet.len().min(200)]),
+                                format!("LLM HTTP {status}: {}", safe_prefix(&snippet, 200)),
                             )
                             .with_retryable(true)
                         } else {
                             CsError::new(
                                 LLM_BAD_RESPONSE,
-                                format!("LLM HTTP {status}: {}", &snippet[..snippet.len().min(200)]),
+                                format!("LLM HTTP {status}: {}", safe_prefix(&snippet, 200)),
                             )
                         };
                         if ce.retryable && attempt + 1 < attempts {
@@ -273,21 +269,16 @@ impl LlmProvider for OpenAiProvider {
                     match resp.json::<CreateChatCompletionResponse>().await {
                         Ok(resp) => return map_response(resp),
                         Err(e) => {
-                            let ce = CsError::new(
-                                LLM_BAD_RESPONSE,
-                                format!("LLM 响应解析失败: {e}"),
-                            );
+                            let ce =
+                                CsError::new(LLM_BAD_RESPONSE, format!("LLM 响应解析失败: {e}"));
                             tracing::warn!("LLM 调用终局失败: {ce}");
                             return Err(ce.with_retryable(false));
                         }
                     }
                 }
                 Err(e) => {
-                    let ce = CsError::new(
-                        LLM_UNREACHABLE,
-                        format!("LLM 请求失败: {e}"),
-                    )
-                    .with_retryable(true);
+                    let ce = CsError::new(LLM_UNREACHABLE, format!("LLM 请求失败: {e}"))
+                        .with_retryable(true);
                     if attempt + 1 < attempts {
                         tracing::warn!("LLM 第 {} 次调用失败（可重试）: {}", attempt + 1, ce);
                         last = Some(ce);
@@ -329,9 +320,30 @@ fn classify_llm_error(status: Option<u16>, body: &str) -> (CsCode, bool) {
     }
 }
 
+/// 字符边界安全截断：切点落在 UTF-8 多字节字符中缝时回退到上一个边界，绝不 panic。
+fn safe_prefix(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn safe_prefix_never_panics_on_multibyte_boundary() {
+        // 网关中文错误体（如「余额不足」）恰好被字节 200 切进多字节字符中缝的场景
+        let chinese = "余额不足：账户剩余额度请查纳".repeat(20);
+        assert!(safe_prefix(&chinese, 200).len() <= 200); // 不 panic 且不超上限
+        assert_eq!(safe_prefix("余额不足", 5), "余"); // 字节 5 在「额」中缝 → 回退到 3
+        assert_eq!(safe_prefix("abc", 200), "abc"); // 短于上限原样返回
+    }
 
     #[test]
     fn message_mapping_preserves_roles() {

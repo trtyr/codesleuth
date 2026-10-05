@@ -18,7 +18,9 @@ use std::sync::Arc;
 #[ignore = "层进 v0 真网关冒烟：需要 ~/.codesleuth/config.toml 配好 [llm]"]
 async fn layered_v0_smoke() {
     let cfg = codesleuth::config::load(Default::default()).expect("配置加载失败");
-    let key = cfg.resolve_api_key().expect("需要 ~/.codesleuth/config.toml 的 [llm] api_key");
+    let key = cfg
+        .resolve_api_key()
+        .expect("需要 ~/.codesleuth/config.toml 的 [llm] api_key");
     let base = cfg.llm.base_url.clone();
     let model = cfg.llm.model.clone();
 

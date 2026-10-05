@@ -102,8 +102,6 @@ impl VectorStore {
         Ok(())
     }
 
-
-
     /// 垃圾回收（用户拍板 2026-10-04）：删除当前块集合之外的失效块——向量与描述一起清，
     /// 索引学会忘记死数据（陈旧向量会指向已不存在的行号，污染召回）。
     pub fn remove_stale(&self, keys: &[String]) -> CsResult<usize> {

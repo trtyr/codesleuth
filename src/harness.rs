@@ -520,7 +520,11 @@ impl Harness {
             ));
         }
         // FINDING-012：零 findings + 零证据 + 会话有真实读取 → 打回提炼（合法空手需 dead_ends 交代）
-        let observed = self.evidence.lock().expect("evidence lock").observed_paths();
+        let observed = self
+            .evidence
+            .lock()
+            .expect("evidence lock")
+            .observed_paths();
         if findings.is_empty() && !observed.is_empty() && dead_ends.is_empty() {
             let mut shown = observed.clone();
             shown.truncate(8);
@@ -1046,10 +1050,18 @@ mod tests {
         let mut store = EvidenceStore::default();
         let spaced = "00 日记/2026 年 7 月 7 日.md";
         store.observe_exact(spaced, 7);
-        assert_eq!(store.cite_seq(spaced), Some(7), "observe_exact 后应逐字命中");
+        assert_eq!(
+            store.cite_seq(spaced),
+            Some(7),
+            "observe_exact 后应逐字命中"
+        );
 
         // 切词器会把该路径劈成碎片，精确记录不受影响（这正是 read 精确存证存在的原因）
         store.observe("read 输出提到 00 日记/2026 年 7 月 7 日.md 的内容", 9);
-        assert_eq!(store.cite_seq(spaced), Some(7), "碎片化观察不应破坏精确记录");
+        assert_eq!(
+            store.cite_seq(spaced),
+            Some(7),
+            "碎片化观察不应破坏精确记录"
+        );
     }
 }
