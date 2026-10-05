@@ -49,6 +49,7 @@ pub const INDEX_STALE: CsCode = CsCode(4012);
 pub const INDEX_CORRUPT: CsCode = CsCode(4013);
 pub const INDEX_TIMEOUT: CsCode = CsCode(4014);
 pub const INDEX_EMBED_FAILED: CsCode = CsCode(4015);
+pub const INDEX_LOCKED: CsCode = CsCode(4016);
 // ---- CS5xxx 内部 ----
 pub const INTERNAL: CsCode = CsCode(5001);
 pub const ENGINE_NOT_WIRED: CsCode = CsCode(5099);

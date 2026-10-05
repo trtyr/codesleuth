@@ -3,7 +3,7 @@
 
 use crate::config::{self, CliOverrides};
 use crate::errors::{
-    CONFIG_INVALID, CONFIG_MISSING, CsError, CsResult, INDEX_NOT_AVAILABLE, INTERNAL,
+    CONFIG_INVALID, CONFIG_MISSING, CsError, CsResult, INDEX_LOCKED, INDEX_NOT_AVAILABLE, INTERNAL,
     REPO_NOT_FOUND, USER_INPUT, report_error,
 };
 use crate::{audit, fence, harness, llm, tools, vector};
@@ -167,6 +167,16 @@ impl Cli {
         );
         let rt = tokio::runtime::Runtime::new()
             .map_err(|e| CsError::new(INTERNAL, format!("tokio runtime 启动失败: {e}")))?;
+        // D014：手动预建索引与 run 时引导共用同一把引导锁，竞争败者判负退出
+        let _guard = match crate::bootlock::acquire(&repo_abs, crate::bootlock::DEFAULT_TIMEOUT)? {
+            crate::bootlock::BootLock::Won(g) => g,
+            crate::bootlock::BootLock::Lost => {
+                return Err(
+                    CsError::new(INDEX_LOCKED, "另一 codesleuth 进程刚完成向量索引构建")
+                        .with_hint("索引已就绪：重跑本命令即可（增量复用，秒过）"),
+                );
+            }
+        };
         let report = rt.block_on(vector::build_vector_index(
             &repo_abs,
             &vector::store::project_index_dir(&repo_abs),
@@ -262,6 +272,10 @@ impl Cli {
                 tracing::debug!("# codegraph MCP ready（explore/callers/callees/impact/files）");
                 Some(Arc::new(engine))
             }
+            Err(e) if e.code == INDEX_LOCKED => {
+                // D014：引导锁竞争败者判负退出——绝不带着残缺工具面继续任务
+                return Err(e);
+            }
             Err(e) => {
                 tracing::warn!("codegraph 未就绪（结构工具降级，其余继续）: {e}");
                 None
@@ -308,6 +322,10 @@ impl Cli {
             ) {
                 Ok(Some(suffix)) => first_suffix = Some(suffix),
                 Ok(None) => {}
+                Err(e) if e.code == INDEX_LOCKED => {
+                    // D014：引导锁竞争败者判负退出——不降级
+                    return Err(e);
+                }
                 Err(e) => {
                     tracing::warn!("向量层装配失败（本会话无召回层，任务继续）: {e}");
                 }
@@ -518,6 +536,17 @@ fn setup_vector_layer(
         &cfg.vector.embed_model,
         cfg.vector.embed_dims,
     );
+    // D014：向量构建与 graph 引导共用仓库级引导锁，进程间串行化；
+    // 竞争败者（Lost）判负退出，不降级。
+    let vguard = match crate::bootlock::acquire(ctx.repo_abs, crate::bootlock::DEFAULT_TIMEOUT)? {
+        crate::bootlock::BootLock::Won(g) => g,
+        crate::bootlock::BootLock::Lost => {
+            return Err(
+                CsError::new(INDEX_LOCKED, "另一 codesleuth 进程刚完成向量索引构建")
+                    .with_hint("索引已就绪：重跑本命令即可（增量复用，秒过）"),
+            );
+        }
+    };
     // 索引补建失败不致命（弹性降级，E3-R1 engram CS4015 教训）：警告后尝试复用已有索引
     match ctx.rt.block_on(vector::build_vector_index(
         ctx.repo_abs,
@@ -533,6 +562,7 @@ fn setup_vector_layer(
             tracing::warn!("向量索引构建失败（降级：尝试复用已有索引）: {e}");
         }
     }
+    drop(vguard); // 构建段结束即放锁（D014：锁不跨 LLM 调用、不罩检索）
     let idx = vector::store::index_path(
         &vector::store::project_index_dir(ctx.repo_abs),
         &vector::store::fingerprint(ctx.repo_abs),

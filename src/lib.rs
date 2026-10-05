@@ -4,6 +4,7 @@
 //! 公开仓的事实权威 = README + 本仓库代码与注释。
 
 pub mod audit;
+pub mod bootlock;
 pub mod cli;
 pub mod config;
 pub mod context;
