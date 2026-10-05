@@ -10,3 +10,4 @@
 tests/fixtures/**/.codegraph/
 __pycache__/
 *.pyc
+.codesleuth/
