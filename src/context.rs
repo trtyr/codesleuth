@@ -122,6 +122,13 @@ mod tests {
     }
 
     #[test]
+    fn handoff_recall_starts_at_first_audit_seq() {
+        // P005 R4.1：审计 seq 从 1 起号，handoff 指引的 recall 范围必须从 1 开始
+        let h = build_handoff("找重试", 1, 7);
+        assert!(h.contains("seq 1..=7"), "handoff 应包含 seq 1 起点: {h}");
+    }
+
+    #[test]
     fn compact_keeps_head_and_recent_keeps_handoff() {
         let mut msgs = vec![user("SYSTEM"), user("TASK")];
         for i in 0..8 {

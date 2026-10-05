@@ -50,10 +50,15 @@ fn walk(dir: &Path, root: &Path, out: &mut Manifest) -> CsResult<()> {
     for e in entries {
         let name = e.file_name().to_string_lossy().to_string();
         let p = e.path();
-        // metadata 跟随符号链接；悬空链接等读不到的条目跳过（如实不完整，不伪造）
-        let Ok(ft) = std::fs::metadata(&p) else {
+        // P005 R4.3：symlink 一律跳过——symlink_metadata 不跟随：目录链接防成环递归与越界遍历，
+        // 文件链接防哈希读出仓外；悬空链接同样读不到，一并跳过（如实不完整，不伪造）
+        let Ok(ft) = std::fs::symlink_metadata(&p) else {
             continue;
         };
+        if ft.file_type().is_symlink() {
+            tracing::debug!("快照跳过符号链接 {p:?}");
+            continue;
+        }
         if ft.is_dir() {
             if SKIP_DIRS.contains(&name.as_str()) {
                 continue;
@@ -184,6 +189,23 @@ mod tests {
                 kind: ChangeKind::Removed
             }]
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn symlink_entries_are_skipped_no_hang() {
+        use std::os::unix::fs::symlink;
+        // P005 R4.3：符号链接（含目录成环）一律跳过——不递归、不进 manifest、不哈希出仓内容
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("f.txt"), "x").unwrap();
+        symlink(&sub, dir.path().join("loop")).unwrap();
+        symlink(sub.join("f.txt"), dir.path().join("alias.txt")).unwrap();
+        let m = snapshot(dir.path()).unwrap();
+        assert!(m.contains_key("sub/f.txt"));
+        assert!(!m.keys().any(|k| k.starts_with("loop")));
+        assert!(!m.contains_key("alias.txt"));
     }
 
     #[test]

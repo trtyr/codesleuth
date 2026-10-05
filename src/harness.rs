@@ -102,8 +102,9 @@ impl Harness {
                 context::compact_threshold_tokens(self.context_tokens, self.compact_percent);
             if context::should_compact(&messages, threshold) {
                 // Phase 2 先行：承上启下 handoff（先于压缩生成，确定性零 LLM）；压缩是纯函数，无驱逐则静默
+                // P005 R4.1：recall 起点必须是 1——审计 seq 从 1 起号，硬编码 2 会让首条记录永久失联
                 let audit_to = self.audit.last_seq();
-                let handoff = context::build_handoff(task, 2, audit_to);
+                let handoff = context::build_handoff(task, 1, audit_to);
                 let (compacted, info) =
                     context::compact(std::mem::take(&mut messages), handoff, context::KEEP_RECENT);
                 if info.evicted_count > 0 {

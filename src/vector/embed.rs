@@ -197,13 +197,43 @@ impl EmbedClient {
                 format!("embeddings 返回 {} 条，请求 {} 条", data.len(), batch.len()),
             ));
         }
+        // P005 R4.2：错位即拒绝（内核见 validate_index_alignment）
+        validate_index_alignment(&data)?;
         Ok(data.into_iter().map(|(_, v)| v).collect())
     }
+}
+
+/// P005 R4.2（bugs 审查 P2）：响应 index 与请求位次必须严格 0-based 对齐——
+/// 数量校验抓不住「1-based 序号/乱序补齐」，向量错位会静默投毒；错位即拒绝。
+fn validate_index_alignment(data: &[(usize, Vec<f32>)]) -> CsResult<()> {
+    for (i, (idx, _)) in data.iter().enumerate() {
+        if *idx != i {
+            return Err(CsError::new(
+                INDEX_EMBED_FAILED,
+                format!(
+                    "embeddings 返回 index {idx} 与期望位置 {i} 错位（网关非 0-based 序号？），拒绝写入防投毒"
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn index_alignment_rejects_nonzero_base() {
+        // P005 R4.2：1-based 序号/乱序补齐 → 错位拒绝，不静默投毒
+        let bad = vec![(1usize, vec![0.1f32]), (2, vec![0.2])];
+        assert!(validate_index_alignment(&bad).is_err());
+        let gap = vec![(0usize, vec![0.1]), (2, vec![0.2])];
+        assert!(validate_index_alignment(&gap).is_err());
+        let ok = vec![(0usize, vec![0.1]), (1, vec![0.2])];
+        assert!(validate_index_alignment(&ok).is_ok());
+        assert!(validate_index_alignment(&[]).is_ok());
+    }
 
     #[test]
     fn build_request_shape() {
