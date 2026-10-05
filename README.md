@@ -37,15 +37,21 @@ codesleuth "这个仓库的重试逻辑在哪？给出 file:line 证据" --repo 
 
 ## 📦 安装
 
-> ⏳ crates.io 上架准备中，当前从源码安装：
-
 ```bash
-git clone https://github.com/trtyr/codesleuth && cd codesleuth
-cargo install --path .
+cargo install codesleuth
 
 # 结构图工具（可选；未安装时自动降级，其余照常）
 npm i -g @colbymchenry/codegraph
 ```
+
+<details>
+<summary>从源码安装</summary>
+
+```bash
+git clone https://github.com/trtyr/codesleuth && cd codesleuth
+cargo install --path .
+```
+</details>
 
 ## 🚀 快速上手
 
