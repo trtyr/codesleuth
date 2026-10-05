@@ -1,6 +1,6 @@
 [package]
 name = "codesleuth"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.88"
 description = "Read-only codebase scout agent: a complete agent-harness CLI that searches codebases and returns evidence-backed reports"
