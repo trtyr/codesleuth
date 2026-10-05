@@ -139,9 +139,17 @@ mod tests {
     #[test]
     fn builder_fluency() {
         let e = CsError::new(CONFIG_MISSING, "key 未找到")
-            .with_hint("设置环境变量")
+            .with_hint("写入 ~/.codesleuth/config.toml 的 [llm].api_key")
+            .with_source("read config.toml: no such file")
             .retryable();
         assert!(e.retryable);
-        assert_eq!(e.hint.as_deref(), Some("设置环境变量"));
+        assert_eq!(
+            e.hint.as_deref(),
+            Some("写入 ~/.codesleuth/config.toml 的 [llm].api_key")
+        );
+        assert_eq!(
+            e.source_text.as_deref(),
+            Some("read config.toml: no such file")
+        );
     }
 }

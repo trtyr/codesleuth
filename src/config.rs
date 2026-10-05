@@ -236,9 +236,39 @@ pub fn apply_set(fc: &mut FileConfig, key: &str, value: String) -> CsResult<()> 
         "llm.model" => &mut fc.llm.model,
         "vector.embed_model" => &mut fc.vector.embed_model,
         "vector.embed_mode" => &mut fc.vector.embed_mode,
+        "vector.base_url" => &mut fc.vector.base_url,
+        "vector.api_key" => &mut fc.vector.api_key,
+        "vector.embed_dims" => {
+            let v = value.parse::<u32>().map_err(|e| {
+                CsError::new(
+                    CONFIG_INVALID,
+                    format!("embed_dims 需要正整数: {value}（{e}）"),
+                )
+            })?;
+            fc.vector.embed_dims = Some(v);
+            return Ok(());
+        }
+        "vector.repomap_budget" => {
+            let v = value.parse::<usize>().map_err(|e| {
+                CsError::new(
+                    CONFIG_INVALID,
+                    format!("repomap_budget 需要正整数: {value}（{e}）"),
+                )
+            })?;
+            fc.vector.repomap_budget = Some(v);
+            return Ok(());
+        }
+        "behavior.thinking_on" => {
+            let v = value.parse::<bool>().map_err(|_| {
+                CsError::new(CONFIG_INVALID, format!("thinking_on 需要布尔: {value}"))
+                    .with_hint("取值: true | false")
+            })?;
+            fc.behavior.thinking_on = Some(v);
+            return Ok(());
+        }
         other => {
             return Err(CsError::new(CONFIG_INVALID, format!("未知配置键: {other}"))
-                .with_hint("可用键: llm.base_url | llm.api_key | llm.model | vector.embed_model | vector.embed_mode（数值键 vector.embed_dims / vector.repomap_budget / behavior.thinking_on 走 config set-num）"));
+                .with_hint("可用键: llm.base_url | llm.api_key | llm.model | vector.embed_model | vector.embed_mode | vector.base_url | vector.api_key | vector.embed_dims | vector.repomap_budget | behavior.thinking_on"));
         }
     };
     *slot = Some(value);

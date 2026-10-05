@@ -8,6 +8,7 @@ pub mod cli;
 pub mod config;
 pub mod context;
 pub mod errors;
+pub mod evidence;
 pub mod fence;
 pub mod harness;
 pub mod llm;

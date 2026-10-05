@@ -83,7 +83,7 @@ pub enum ConfigAction {
     },
     /// 写入全局配置
     Set {
-        /// 键（llm.base_url | llm.api_key | llm.model | vector.* | behavior.*）
+        /// 键（llm.base_url | llm.api_key | llm.model | vector.* | behavior.thinking_on）
         key: String,
         /// 值
         value: String,
@@ -294,113 +294,22 @@ impl Cli {
 
         // P003 E1b/E2 v2：向量层 + 任务相关导航图（召回命中喂地图当种子，首条消息一次性注入）
         if self.vector {
-            let mode = match cfg.vector.embed_mode.as_str() {
-                "raw" => vector::EmbedMode::Raw,
-                _ => vector::EmbedMode::Composite,
-            };
-            // 嵌入可用独立供应商：[vector] base_url/api_key 缺省时跟随 [llm]（FINDING-013 前瞻）
-            let embed_base = cfg
-                .vector
-                .base_url
-                .clone()
-                .unwrap_or_else(|| cfg.llm.base_url.clone());
-            let embed_key = match cfg.vector.api_key.clone().or_else(|| Some(api_key.clone())) {
-                Some(k) => k,
-                None => {
-                    return Err(CsError::new(
-                        crate::errors::USER_INPUT,
-                        "嵌入密钥缺失：[vector].api_key 与 [llm].api_key 均未配置",
-                    ));
-                }
-            };
-            let embed = vector::EmbedClient::new(
-                &embed_base,
-                &embed_key,
-                &cfg.vector.embed_model,
-                cfg.vector.embed_dims,
-            );
-            // 索引补建失败不致命（弹性降级，E3-R1 engram CS4015 教训）：警告后尝试复用已有索引
-            match rt.block_on(vector::build_vector_index(
-                &repo_abs,
-                &vector::store::project_index_dir(&repo_abs),
-                embed.clone(),
-                mode,
-            )) {
-                Ok(report) => eprintln!(
-                    "# 向量索引: {} chunks（嵌入 {} 复用 {} 清理 {}）",
-                    report.chunks_total, report.embedded, report.reused, report.gc_removed
-                ),
+            match setup_vector_layer(
+                &VectorLayerCtx {
+                    repo_abs: &repo_abs,
+                    task: &task,
+                    api_key: &api_key,
+                    cg_db: &cg_db,
+                    rt: &rt,
+                },
+                &cfg,
+                self.repo_map,
+                &mut registry,
+            ) {
+                Ok(Some(suffix)) => first_suffix = Some(suffix),
+                Ok(None) => {}
                 Err(e) => {
-                    tracing::warn!("向量索引构建失败（降级：尝试复用已有索引）: {e}");
-                }
-            }
-            let idx = vector::store::index_path(
-                &vector::store::project_index_dir(&repo_abs),
-                &vector::store::fingerprint(&repo_abs),
-            );
-            match vector::VectorStore::open(&idx) {
-                Ok(store) => {
-                    let recall = Arc::new(vector::RecallEngine::open(store, embed)?);
-                    registry.register(Box::new(tools::vector_search::VectorSearchTool::new(
-                        Arc::clone(&recall),
-                    )));
-                    // 召回先行（P003 E2 v2）：命中喂给导航图当种子；失败降级为无后缀
-                    let hits = match rt.block_on(recall.recall(&task, 10)) {
-                        Ok(h) => h,
-                        Err(e) => {
-                            tracing::warn!("召回失败（跳过注入）: {e}");
-                            Vec::new()
-                        }
-                    };
-                    let mut parts: Vec<String> = Vec::new();
-                    if !hits.is_empty() {
-                        parts.push(vector::recall::RecallEngine::format_recall_block(&hits, 10));
-                    }
-                    if self.repo_map {
-                        let budget = cfg.vector.repomap_budget;
-                        match vector::repomap::repo_map_inputs(&cg_db) {
-                            Ok((symbols, degrees)) => {
-                                let mut seeds: Vec<String> = Vec::new();
-                                let mut neighbors: std::collections::HashSet<String> =
-                                    std::collections::HashSet::new();
-                                for (c, _) in &hits {
-                                    if c.kind == "fallback" || c.kind == "leftover" {
-                                        continue;
-                                    }
-                                    if seeds.contains(&c.symbol) {
-                                        continue;
-                                    }
-                                    let (callers, callees) = vector::chunk::relations_for_symbol(
-                                        &cg_db, &c.file, &c.symbol,
-                                    )
-                                    .unwrap_or_default();
-                                    for n in callers.into_iter().chain(callees) {
-                                        neighbors.insert(n);
-                                    }
-                                    seeds.push(c.symbol.clone());
-                                }
-                                let map = vector::repomap::build_task_map(
-                                    &symbols, &degrees, budget, &seeds, &neighbors,
-                                );
-                                eprintln!(
-                                    "# 任务导航图: {} 字符（种子 {}，邻居 {}）",
-                                    map.len(),
-                                    seeds.len(),
-                                    neighbors.len()
-                                );
-                                parts.push(vector::repomap::wrap_repo_section(&map));
-                            }
-                            Err(e) => {
-                                tracing::warn!("导航图构建失败（跳过注入）: {e}");
-                            }
-                        }
-                    }
-                    if !parts.is_empty() {
-                        first_suffix = Some(parts.join("\n\n"));
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("向量索引不可用（本会话无召回层，任务继续）: {e}");
+                    tracing::warn!("向量层装配失败（本会话无召回层，任务继续）: {e}");
                 }
             }
         }
@@ -562,15 +471,162 @@ fn run_config(action: ConfigAction) -> i32 {
     }
 }
 
+/// 向量层装配上下文（P004 T6.1：从 run_task_inner 抽出，消除上帝函数）。
+struct VectorLayerCtx<'a> {
+    repo_abs: &'a std::path::Path,
+    task: &'a str,
+    api_key: &'a str,
+    cg_db: &'a std::path::Path,
+    rt: &'a tokio::runtime::Runtime,
+}
+
+/// 向量层装配：补建索引 → 开库 → 注册 vector_search → 召回暖启动 + 任务导航图。
+/// 返回注入首条消息的后缀（召回块 + 导航图）；向量不可用时 Ok(None)（弹性降级，不致命）。
+fn setup_vector_layer(
+    ctx: &VectorLayerCtx<'_>,
+    cfg: &config::Config,
+    repo_map: bool,
+    registry: &mut tools::ToolRegistry,
+) -> CsResult<Option<String>> {
+    let mode = match cfg.vector.embed_mode.as_str() {
+        "raw" => vector::EmbedMode::Raw,
+        _ => vector::EmbedMode::Composite,
+    };
+    // 嵌入可用独立供应商：[vector] base_url/api_key 缺省时跟随 [llm]（FINDING-013 前瞻）
+    let embed_base = cfg
+        .vector
+        .base_url
+        .clone()
+        .unwrap_or_else(|| cfg.llm.base_url.clone());
+    let embed_key = match cfg
+        .vector
+        .api_key
+        .clone()
+        .or_else(|| Some(ctx.api_key.to_string()))
+    {
+        Some(k) => k,
+        None => {
+            return Err(CsError::new(
+                crate::errors::USER_INPUT,
+                "嵌入密钥缺失：[vector].api_key 与 [llm].api_key 均未配置",
+            ));
+        }
+    };
+    let embed = vector::EmbedClient::new(
+        &embed_base,
+        &embed_key,
+        &cfg.vector.embed_model,
+        cfg.vector.embed_dims,
+    );
+    // 索引补建失败不致命（弹性降级，E3-R1 engram CS4015 教训）：警告后尝试复用已有索引
+    match ctx.rt.block_on(vector::build_vector_index(
+        ctx.repo_abs,
+        &vector::store::project_index_dir(ctx.repo_abs),
+        embed.clone(),
+        mode,
+    )) {
+        Ok(report) => eprintln!(
+            "# 向量索引: {} chunks（嵌入 {} 复用 {} 清理 {}）",
+            report.chunks_total, report.embedded, report.reused, report.gc_removed
+        ),
+        Err(e) => {
+            tracing::warn!("向量索引构建失败（降级：尝试复用已有索引）: {e}");
+        }
+    }
+    let idx = vector::store::index_path(
+        &vector::store::project_index_dir(ctx.repo_abs),
+        &vector::store::fingerprint(ctx.repo_abs),
+    );
+    let store = match vector::VectorStore::open(&idx) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("向量索引不可用（本会话无召回层，任务继续）: {e}");
+            return Ok(None);
+        }
+    };
+    let recall = Arc::new(vector::RecallEngine::open(store, embed)?);
+    registry.register(Box::new(tools::vector_search::VectorSearchTool::new(
+        Arc::clone(&recall),
+    )));
+    // 召回先行（P003 E2 v2）：命中喂给导航图当种子；失败降级为无后缀
+    let hits = match ctx.rt.block_on(recall.recall(ctx.task, 10)) {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::warn!("召回失败（跳过注入）: {e}");
+            Vec::new()
+        }
+    };
+    let mut parts: Vec<String> = Vec::new();
+    if !hits.is_empty() {
+        parts.push(vector::recall::RecallEngine::format_recall_block(&hits, 10));
+    }
+    if repo_map {
+        let budget = cfg.vector.repomap_budget;
+        match vector::repomap::repo_map_inputs(ctx.cg_db) {
+            Ok((symbols, degrees)) => {
+                let mut seeds: Vec<String> = Vec::new();
+                let mut neighbors: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
+                for (c, _) in &hits {
+                    if c.kind == "fallback" || c.kind == "leftover" {
+                        continue;
+                    }
+                    if seeds.contains(&c.symbol) {
+                        continue;
+                    }
+                    let (callers, callees) =
+                        vector::chunk::relations_for_symbol(ctx.cg_db, &c.file, &c.symbol)
+                            .unwrap_or_default();
+                    for n in callers.into_iter().chain(callees) {
+                        neighbors.insert(n);
+                    }
+                    seeds.push(c.symbol.clone());
+                }
+                let map =
+                    vector::repomap::build_task_map(&symbols, &degrees, budget, &seeds, &neighbors);
+                eprintln!(
+                    "# 任务导航图: {} 字符（种子 {}，邻居 {}）",
+                    map.len(),
+                    seeds.len(),
+                    neighbors.len()
+                );
+                parts.push(vector::repomap::wrap_repo_section(&map));
+            }
+            Err(e) => {
+                tracing::warn!("导航图构建失败（跳过注入）: {e}");
+            }
+        }
+    }
+    if parts.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(parts.join("\n\n")))
+    }
+}
+
 fn config_get(key: Option<String>) -> CsResult<String> {
     let cfg = config::load(config::CliOverrides::default())?;
     match key.as_deref() {
         None => toml::to_string_pretty(&config::to_file_view(&cfg))
             .map_err(|e| CsError::new(INTERNAL, format!("序列化失败: {e}"))),
         Some("llm.base_url") => Ok(cfg.llm.base_url.clone()),
+        Some("llm.api_key") => Ok(cfg.llm.api_key.clone().unwrap_or_default()),
         Some("llm.model") => Ok(cfg.llm.model.clone()),
+        Some("vector.embed_model") => Ok(cfg.vector.embed_model.clone()),
+        Some("vector.embed_dims") => Ok(cfg.vector.embed_dims.to_string()),
+        Some("vector.embed_mode") => Ok(cfg.vector.embed_mode.clone()),
+        Some("vector.base_url") => {
+            Ok(cfg.vector.base_url.clone().unwrap_or_else(|| cfg.llm.base_url.clone()))
+        }
+        Some("vector.api_key") => Ok(cfg
+            .vector
+            .api_key
+            .clone()
+            .unwrap_or_else(|| cfg.llm.api_key.clone().unwrap_or_default())),
+        Some("vector.repomap_budget") => Ok(cfg.vector.repomap_budget.to_string()),
+        Some("behavior.thinking_on") => Ok((!cfg.thinking_disabled).to_string()),
         Some(other) => Err(CsError::new(CONFIG_INVALID, format!("未知配置键: {other}"))
-            .with_hint("可用键: llm.base_url | llm.api_key | llm.model")),
+            .with_hint("可用键: llm.base_url | llm.api_key | llm.model | vector.embed_model | vector.embed_dims | vector.embed_mode | vector.base_url | vector.api_key | vector.repomap_budget | behavior.thinking_on")),
     }
 }
 
