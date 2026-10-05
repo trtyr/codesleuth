@@ -263,7 +263,7 @@ impl LlmProvider for OpenAiProvider {
                             last = Some(ce);
                             continue;
                         }
-                        tracing::warn!("LLM 调用终局失败: {ce}");
+                        tracing::error!("LLM 调用终局失败: {ce}");
                         return Err(ce.with_retryable(false));
                     }
                     match resp.json::<CreateChatCompletionResponse>().await {
@@ -271,7 +271,7 @@ impl LlmProvider for OpenAiProvider {
                         Err(e) => {
                             let ce =
                                 CsError::new(LLM_BAD_RESPONSE, format!("LLM 响应解析失败: {e}"));
-                            tracing::warn!("LLM 调用终局失败: {ce}");
+                            tracing::error!("LLM 调用终局失败: {ce}");
                             return Err(ce.with_retryable(false));
                         }
                     }

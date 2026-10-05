@@ -76,6 +76,22 @@ impl Audit {
                 .with_hint(format!("状态目录: {}", dir.display()))
         })?;
         let path = dir.join(format!("{session_id}.jsonl"));
+        // 单代轮转（P004 T4）：超过上限时旧文件让位（.old），审计磁盘占用不无界增长。
+        // 代价：轮转后 recall 无法读旧代已被驱逐的原文——64MB 上限下单会话极难触发。
+        const AUDIT_MAX_BYTES: u64 = 64 * 1024 * 1024;
+        if let Ok(meta) = std::fs::metadata(&path)
+            && meta.len() > AUDIT_MAX_BYTES
+        {
+            let rotated = dir.join(format!("{session_id}.jsonl.old"));
+            match std::fs::rename(&path, &rotated) {
+                Ok(()) => tracing::warn!(
+                    "审计文件超 {} MB，已轮转到 {}",
+                    AUDIT_MAX_BYTES / (1024 * 1024),
+                    rotated.display()
+                ),
+                Err(e) => tracing::warn!("审计文件轮转失败（继续追加）: {e}"),
+            }
+        }
         let file = OpenOptions::new()
             .create(true)
             .append(true)

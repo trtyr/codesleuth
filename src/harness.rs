@@ -612,6 +612,8 @@ impl Harness {
 fn fuse_if_hit(streak: u32, audit: &Audit) -> CsResult<Option<CsError>> {
     if streak >= MAX_NO_PROGRESS_STREAK {
         audit.record("fuse", &serde_json::json!({"no_progress_streak": streak}))?;
+        // 熔断 = 会话级失败（P004 T4）：ERROR 级必打，不随 -v 静默
+        tracing::error!("熔断触发：连续 {streak} 步无进展（CS2099）");
         Ok(Some(CsError::new(
             LLM_FUSE,
             format!("连续 {streak} 步无进展（重复/非法/零增量），熔断（故障域，非成本限制）"),

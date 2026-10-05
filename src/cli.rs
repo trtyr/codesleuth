@@ -261,11 +261,11 @@ impl Cli {
             tools::graph::CodegraphEngine::start(&repo_abs, self.fresh_index),
         ) {
             Ok(engine) => {
-                eprintln!("# codegraph MCP ready（explore/callers/callees/impact/files）");
+                tracing::debug!("# codegraph MCP ready（explore/callers/callees/impact/files）");
                 Some(Arc::new(engine))
             }
             Err(e) => {
-                eprintln!("# codegraph 未就绪（结构工具降级，其余继续）: {e}");
+                tracing::warn!("codegraph 未就绪（结构工具降级，其余继续）: {e}");
                 None
             }
         };
@@ -286,7 +286,7 @@ impl Cli {
                 registry.register(Box::new(tools::graph::ImpactTool::new(cg.clone())));
                 registry.register(Box::new(tools::graph::FilesTool::new(cg.clone())));
             } else {
-                eprintln!("# codegraph 无符号索引（非代码仓）：图工具未注册");
+                tracing::info!("# codegraph 无符号索引（非代码仓）：图工具未注册");
                 parts.push(
                     "〔地形提示〕本仓库无结构图索引（非代码仓或未建索引）：explore/callers/callees/impact 不可用。                     请用 find_files（带关键词）与 grep（带内容模式）探索，用 read 阅读具体文件。"
                         .into(),
@@ -416,7 +416,7 @@ impl Cli {
             match vector::repomap::repo_map_inputs(&cg_db) {
                 Ok((symbols, degrees)) => {
                     let map = vector::repomap::build_repo_map(&symbols, &degrees, budget);
-                    eprintln!("# 全局导航图: {} 字符", map.len());
+                    tracing::debug!("# 全局导航图: {} 字符", map.len());
                     first_suffix = Some(vector::repomap::wrap_repo_section(&map));
                 }
                 Err(e) => {
@@ -464,6 +464,11 @@ impl Cli {
                     if changes.is_empty() {
                         eprintln!("# 零写入自证：{} 文件快照，无变更 ✓", before.len());
                     } else {
+                        // 完整性违规 = 会话级严重事件（P004 T4）：ERROR 级必打
+                        tracing::error!(
+                            "零写入自证检测到 {} 处未归属变更（完整性违规）",
+                            changes.len()
+                        );
                         eprintln!(
                             "# 零写入自证：{} 文件快照，{} 处不可归因变更（并发/外部）：",
                             before.len(),
@@ -486,7 +491,7 @@ impl Cli {
                     ) {
                         tracing::warn!("write_check 审计留痕失败: {audit_err}");
                     }
-                    eprintln!("# 零写入自证不可用: {e}");
+                    tracing::warn!("零写入自证不可用: {e}");
                 }
             }
         }
