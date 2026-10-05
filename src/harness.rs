@@ -2,7 +2,7 @@
 //! 收敛 = submit_report（结构化报告 + 证据校验）或 prose 降级；空转结构性禁止（D002）；
 //! 上下文装不下 → 确定性压缩 + recall 钻取（D008）。
 
-use crate::audit::{Audit, Ledger};
+use crate::audit::Audit;
 use crate::context;
 use crate::errors::{CsError, CsResult, LLM_FUSE};
 use crate::llm::{ChatMessage, ChatRequest, LlmProvider, ToolCallSpec, ToolSchema};
@@ -36,7 +36,6 @@ pub struct Harness {
     provider: Arc<dyn LlmProvider>,
     tools: ToolRegistry,
     audit: Audit,
-    ledger: Mutex<Ledger>,
     evidence: Mutex<EvidenceStore>,
     model: String,
     context_tokens: u64,
@@ -49,7 +48,6 @@ impl Harness {
         provider: Arc<dyn LlmProvider>,
         tools: ToolRegistry,
         audit: Audit,
-        ledger: Ledger,
         model: String,
         context_tokens: u64,
         compact_percent: u64,
@@ -58,7 +56,6 @@ impl Harness {
             provider,
             tools,
             audit,
-            ledger: Mutex::new(ledger),
             evidence: Mutex::new(EvidenceStore::default()),
             model,
             context_tokens,
@@ -106,20 +103,14 @@ impl Harness {
             if context::should_compact(&messages, threshold) {
                 // Phase 2 先行：承上启下 handoff（先于压缩生成，确定性零 LLM）；压缩是纯函数，无驱逐则静默
                 let audit_to = self.audit.last_seq();
-                let ledger_render = self
-                    .ledger
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .render();
-                let handoff = context::build_handoff(task, &ledger_render, 2, audit_to);
+                let handoff = context::build_handoff(task, 2, audit_to);
                 let (compacted, info) =
                     context::compact(std::mem::take(&mut messages), handoff, context::KEEP_RECENT);
                 if info.evicted_count > 0 {
-                    // Phase 1 持久化 + Phase 3 提交（有真实驱逐才留痕，不产噪音）
-                    let persisted = self.ledger.lock().unwrap_or_else(|p| p.into_inner()).save();
+                    // Phase 3 提交（有真实驱逐才留痕，不产噪音）
                     self.audit.record(
                         "compaction_begin",
-                        &serde_json::json!({"ledger_saved": persisted.is_ok(), "threshold_tokens": threshold}),
+                        &serde_json::json!({"threshold_tokens": threshold}),
                     )?;
                     messages = compacted;
                     self.audit.record(
@@ -405,10 +396,6 @@ impl Harness {
                         }
                     }
                 }
-            }
-
-            if let Err(e) = self.ledger.lock().unwrap_or_else(|p| p.into_inner()).save() {
-                tracing::warn!("账本保存失败: {e}");
             }
         }
     }
@@ -696,24 +683,6 @@ impl EvidenceStore {
     pub fn cite_seq(&self, path: &str) -> Option<u64> {
         self.paths.get(path).copied()
     }
-
-    /// 从文本提取 path:line 引用，返回「未在本会话观察过」的引用。
-    pub fn validate_uncited(&self, text: &str) -> Vec<String> {
-        let mut missing = Vec::new();
-        for tok in text.split(|c: char| c.is_whitespace() || "[]()<>\"'`,;".contains(c)) {
-            let t = tok.trim_matches(|c| c == '.' || c == ':');
-            let Some((path, line)) = t.rsplit_once(':') else {
-                continue;
-            };
-            if line.is_empty() || !line.chars().all(|c| c.is_ascii_digit()) {
-                continue;
-            }
-            if path_like(path) && !self.paths.contains_key(path) {
-                missing.push(t.to_string());
-            }
-        }
-        missing
-    }
 }
 
 #[cfg(test)]
@@ -812,15 +781,7 @@ mod tests {
             script: Mutex::new(script.into_iter().collect()),
             seen: seen.clone(),
         });
-        let harness = Harness::new(
-            provider,
-            registry,
-            audit,
-            Ledger::load(dir.path().join("l.json")),
-            "m".into(),
-            1_000_000,
-            60,
-        );
+        let harness = Harness::new(provider, registry, audit, "m".into(), 1_000_000, 60);
         let res = harness.run("任务").await;
         (res, seen, dir)
     }
@@ -1086,7 +1047,6 @@ mod tests {
             provider,
             reg2,
             audit,
-            Ledger::load(dir.path().join("l.json")),
             "m".into(),
             400, // threshold = 400 × 100% = 400 tokens ≈ 1600 chars
             100,
@@ -1126,12 +1086,9 @@ mod tests {
     }
 
     #[test]
-    fn evidence_store_validates_citations() {
+    fn evidence_store_observes_citations() {
         let mut store = EvidenceStore::default();
         store.observe("输出提到 src/main.rs", 3);
-        let missing = store.validate_uncited("见 src/main.rs:12 与 bar/baz.rs:3");
-        assert!(missing.contains(&"bar/baz.rs:3".to_string()));
-        assert!(!missing.iter().any(|m| m.contains("src/main.rs")));
         assert_eq!(store.cite_seq("src/main.rs"), Some(3));
     }
 

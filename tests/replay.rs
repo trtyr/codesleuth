@@ -1,7 +1,7 @@
 //! 录制回放契约测试（D003.3）：LLM 响应序列录制为 fixture，回放时断言
 //! 工具调用序列与结构化报告——全程零网络、零真实 token。
 
-use codesleuth::audit::{Audit, Ledger};
+use codesleuth::audit::Audit;
 use codesleuth::fence::Fence;
 use codesleuth::harness::Harness;
 use codesleuth::llm::{ChatRequest, ChatResponse, LlmProvider, ToolCallSpec, Usage};
@@ -77,7 +77,6 @@ async fn recorded_replay_produces_same_tool_sequence_and_report() {
         provider,
         registry,
         audit,
-        Ledger::load(dir.path().join("l.json")),
         "replayed-model".into(),
         1_000_000,
         60,

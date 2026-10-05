@@ -4,7 +4,7 @@
 //!
 //! 验收：摸点（find_files/grep）→ 落锤有证（read）→ 报告含 file:line 定位。
 
-use codesleuth::audit::{Audit, Ledger};
+use codesleuth::audit::Audit;
 use codesleuth::fence::Fence;
 use codesleuth::harness::Harness;
 use codesleuth::llm::{LlmProvider, OpenAiProvider};
@@ -35,8 +35,7 @@ async fn layered_v0_smoke() {
     let provider: Arc<dyn LlmProvider> = Arc::new(OpenAiProvider::new(&base, &key, 2, false));
     let dir = tempfile::tempdir().unwrap();
     let audit = Audit::create(dir.path(), "smoke").unwrap();
-    let ledger = Ledger::load(dir.path().join("ledger.json"));
-    let agent = Harness::new(provider, registry, audit, ledger, model, 1_000_000, 60);
+    let agent = Harness::new(provider, registry, audit, model, 1_000_000, 60);
 
     let outcome = agent
         .run("这个样例仓库的重试逻辑在哪个文件哪一行？给出 file:line 证据。")

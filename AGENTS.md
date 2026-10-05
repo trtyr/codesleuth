@@ -10,7 +10,7 @@
 
 状态目录：~/.codesleuth/（config.toml + reports/audit/ledger/eval）；项目级落 <project>/.codesleuth/（索引）。
 2. **docs/plantree/ 不进 git**（本地规划态，`.gitignore` 已排除，勿移除该规则）。
-3. **密钥不进任何文件**：API key 只从环境变量读取；测试密钥在 engram credentials（`newapi/codesleuth-test`），不写入仓库。
+3. **密钥不进任何文件**：API key 住 `~/.codesleuth/config.toml`（用户自担，env 层已移除）；测试密钥在 engram credentials（`newapi/codesleuth-test`），不写入仓库。
 4. **上下文压缩必须确定性**（零 LLM 调用），不做散文式摘要（D008）。
 5. **方案变更先回写 plan tree**（decisions/ 或 topics/）再动代码——「为什么这么设计」的唯一来源在那里。
 

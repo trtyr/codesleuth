@@ -1,7 +1,7 @@
 //! codesleuth —— 只读代码侦察 Agent harness。
 //!
-//! 模块地图见 docs/plantree/baseline/module-map.md；
-//! 权威方案见 docs/plantree/plans/001-read-only-agent-harness/topics/solution-map.md。
+//! 模块地图与权威方案原文在作者本地的 docs/plantree/（规划态，.gitignore 排除，不随仓库分发）；
+//! 公开仓的事实权威 = README + 本仓库代码与注释。
 
 pub mod audit;
 pub mod cli;

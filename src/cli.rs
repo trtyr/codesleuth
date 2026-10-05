@@ -233,8 +233,6 @@ impl Cli {
             .ok_or_else(|| CsError::new(CONFIG_MISSING, "找不到 HOME（无法定位 ~/.codesleuth）"))?;
         let session_id = audit::new_session_id();
         let audit_log = audit::Audit::create(&state_dir, &session_id)?;
-        let ledger =
-            audit::Ledger::load(state_dir.join("ledger").join(format!("{session_id}.json")));
 
         let provider: llm::SharedProvider = Arc::new(llm::OpenAiProvider::new(
             &cfg.llm.base_url,
@@ -429,7 +427,6 @@ impl Cli {
             provider,
             registry,
             audit_log,
-            ledger,
             cfg.llm.model.clone(),
             cfg.context.model_context_tokens,
             cfg.context.compact_at_percent,

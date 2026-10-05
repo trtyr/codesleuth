@@ -42,15 +42,14 @@ pub struct Compaction {
 }
 
 /// 承上启下 handoff（D013）：先于压缩生成的衔接物——
-/// 任务重述 + 已确认发现账本（跨压缩存活）+ 驱逐范围与 recall 指引 + 下一步指引。
+/// 任务重述 + 驱逐范围与 recall 指引 + 下一步指引。
 /// 确定性拼装，零 LLM。
-pub fn build_handoff(task: &str, ledger_render: &str, audit_from: u64, audit_to: u64) -> String {
+pub fn build_handoff(task: &str, audit_from: u64, audit_to: u64) -> String {
     format!(
         "[承上启下 · 压缩交接]\n\
          任务：{task}\n\n\
-         已确认发现（证据账本，跨压缩存活）：\n{ledger_render}\n\
-         已驱逐早期原始消息（审计 seq {audit_from}..={audit_to}；全量原文用 recall {{\"from\": .., \"to\": ..}} 续读，不重不漏）。\n\
-         下一步：先复核上方账本，继续未完成线索；不要重做已完成的检索。"
+         已驱逐早期原始消息（审计 seq {audit_from}..={audit_to}；全量原文用 recall {{\"from\": .., \"to\": ..}} 续读，不重不漏）。\
+         下一步：基于已读内容继续未完成线索；不要重做已完成的检索。"
     )
 }
 
@@ -128,7 +127,7 @@ mod tests {
         for i in 0..8 {
             msgs.push(big_user(&format!("m{i} ")));
         }
-        let handoff = build_handoff("找重试", "- #abc [finding] 重试在 retry.rs", 2, 42);
+        let handoff = build_handoff("找重试", 2, 42);
         let (out, info) = compact(msgs, handoff, 6);
         assert_eq!(info.evicted_count, 2);
         // head 2 + handoff 1 + 最近 6 = 9
@@ -140,7 +139,6 @@ mod tests {
             other => panic!("expect user notice, got {other:?}"),
         };
         assert!(notice.contains("承上启下"));
-        assert!(notice.contains("重试在 retry.rs"), "账本必须跨压缩存活");
         assert!(notice.contains("不要重做"));
         assert!(notice.contains("recall"));
         assert!(notice.contains("任务：找重试"));

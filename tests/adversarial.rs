@@ -3,7 +3,7 @@
 //!   ② 路径围栏：symlink/绝对路径逃逸一律拒（CS3003）
 //!   ③ 目标仓库零写入：完整会话前后，目标目录指纹逐字节不变
 
-use codesleuth::audit::{Audit, Ledger};
+use codesleuth::audit::Audit;
 use codesleuth::fence::Fence;
 use codesleuth::harness::Harness;
 use codesleuth::llm::{ChatRequest, ChatResponse, LlmProvider, ToolCallSpec, Usage};
@@ -190,7 +190,6 @@ async fn assertion_3_target_repo_untouched_after_full_session() {
         provider,
         registry,
         Audit::create(dir.path(), "adv").unwrap(),
-        Ledger::load(dir.path().join("l.json")),
         "m".into(),
         1_000_000,
         60,
