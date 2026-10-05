@@ -163,6 +163,15 @@ impl Harness {
                     "tool_call_count": resp.tool_calls.len(),
                 }),
             )?;
+            // P005 R7.4 补遗（审计偏差修正）：llm_turn 结构化事件——原计划与 tool_exec 同批，
+            // 因整批编辑连坐失败漏落
+            tracing::debug!(
+                turns,
+                duration_ms,
+                tokens = resp.usage.total_tokens,
+                tool_calls = resp.tool_calls.len(),
+                "llm_turn"
+            );
 
             // 无工具调用：先引导 submit_report，再降级接受 prose（诚实标注 degraded）
             if resp.tool_calls.is_empty() {
