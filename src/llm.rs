@@ -104,6 +104,19 @@ impl OpenAiProvider {
         }
     }
 
+    /// 网关响应容错解码（D015）：先落 serde_json::Value 剥掉非标枚举字段再走 typed 解码。
+    /// 第三方网关（如 MiniMax-M3 经 newapi）会回 `service_tier: "standard"` 等 OpenAI
+    /// 官方枚举之外的值，async-openai 严格枚举零容忍，整条响应 CS2004 炸死。
+    fn decode_response(text: &str) -> CsResult<CreateChatCompletionResponse> {
+        let mut v: serde_json::Value = serde_json::from_str(text)
+            .map_err(|e| CsError::new(LLM_BAD_RESPONSE, format!("LLM 响应非 JSON: {e}")))?;
+        if let Some(obj) = v.as_object_mut() {
+            obj.remove("service_tier"); // 非标枚举值头号来源（D015）
+        }
+        serde_json::from_value(v)
+            .map_err(|e| CsError::new(LLM_BAD_RESPONSE, format!("LLM 响应解析失败: {e}")))
+    }
+
     fn build_request(req: &ChatRequest) -> CsResult<CreateChatCompletionRequest> {
         let messages: Vec<ChatCompletionRequestMessage> =
             req.messages.iter().map(to_request_message).collect();
@@ -266,13 +279,11 @@ impl LlmProvider for OpenAiProvider {
                         tracing::error!("LLM 调用终局失败: {ce}");
                         return Err(ce.with_retryable(false));
                     }
-                    match resp.json::<CreateChatCompletionResponse>().await {
+                    match Self::decode_response(&resp.text().await.unwrap_or_default()) {
                         Ok(resp) => return map_response(resp),
                         Err(e) => {
-                            let ce =
-                                CsError::new(LLM_BAD_RESPONSE, format!("LLM 响应解析失败: {e}"));
-                            tracing::error!("LLM 调用终局失败: {ce}");
-                            return Err(ce.with_retryable(false));
+                            tracing::error!("LLM 调用终局失败: {e}");
+                            return Err(e.with_retryable(false));
                         }
                     }
                 }
@@ -376,6 +387,34 @@ mod tests {
         assert_eq!(v[2]["tool_calls"][0]["function"]["name"], "echo");
         assert_eq!(v[3]["role"], "tool");
         assert_eq!(v[3]["tool_call_id"], "1");
+    }
+
+    #[test]
+    fn decode_response_tolerates_nonstandard_service_tier() {
+        // D015：MiniMax-M3 经 newapi 网关回 `service_tier: "standard"`（OpenAI 枚举之外），
+        // async-openai 严格枚举零容忍——typed 直解必须炸，容错解码必须活。
+        let raw = r#"{"id":"x","choices":[{"finish_reason":"tool_calls","index":0,"message":{"content":"好","role":"assistant","name":"MiniMax AI","tool_calls":[{"id":"c1","type":"function","function":{"name":"grep","arguments":"{\"pattern\":\"retry\"}"},"index":0}],"audio_content":""}}],"created":1,"model":"MiniMax-M3","object":"chat.completion","usage":{"total_tokens":10,"prompt_tokens":8,"completion_tokens":2},"input_sensitive":false,"service_tier":"standard","base_resp":{"status_code":0,"status_msg":""}}"#;
+
+        // 对照组：typed 直解（等价于修复前的 resp.json::<T>()）确实炸
+        let direct: Result<CreateChatCompletionResponse, _> = serde_json::from_str(raw);
+        assert!(direct.is_err(), "对照组应复现 unknown variant 炸点");
+
+        // 修复后：容错解码成功，字段语义不丢
+        let resp = OpenAiProvider::decode_response(raw).expect("非标 service_tier 不应炸解码");
+        assert_eq!(resp.choices[0].message.content.as_deref(), Some("好"));
+        let tcs = resp.choices[0]
+            .message
+            .tool_calls
+            .clone()
+            .unwrap_or_default();
+        assert_eq!(tcs.len(), 1);
+    }
+
+    #[test]
+    fn decode_response_rejects_non_json_and_keeps_error_semantics() {
+        let err = OpenAiProvider::decode_response("<html>gateway 502</html>").unwrap_err();
+        assert_eq!(err.code, LLM_BAD_RESPONSE);
+        assert!(!err.retryable);
     }
 
     #[test]

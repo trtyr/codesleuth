@@ -553,12 +553,14 @@ impl Harness {
         if findings.is_empty() && !observed.is_empty() && dead_ends.is_empty() {
             let mut shown = observed.clone();
             shown.truncate(8);
+            // D016：拒绝时回显结构诊断 + 最小示例，不让弱模型（如 M3 摊平/漏标记）盲飞重试
             return Err(format!(
                 "报告 findings 为 0，但本会话实际读取过 {} 个文件（如: {}）。\
                  请把读到的内容提炼为 findings 并逐条附上 evidence(file+lines) 后重新提交；\
-                 若确实毫无收获，请把搜索过程写入 dead_ends 后再提交。",
+                 若确实毫无收获，请把搜索过程写入 dead_ends 后再提交。{}",
                 observed.len(),
-                shown.join("、")
+                shown.join("、"),
+                schema_diagnosis(args)
             ));
         }
         if !findings.is_empty() && !observed.is_empty() {
@@ -613,6 +615,41 @@ impl Harness {
     }
 }
 
+/// submit_report 结构诊断（D016）：弱模型常把嵌套结构摊平或泄漏内部标记，
+/// 拒绝时回显实际解析到的顶层键 + required 缺失/类型不符清单 + 最小正确示例。
+fn schema_diagnosis(args: &Value) -> String {
+    let keys: Vec<&str> = args
+        .as_object()
+        .map(|o| o.keys().map(String::as_str).collect())
+        .unwrap_or_default();
+    let mut missing: Vec<&str> = Vec::new();
+    if args
+        .get("answer")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .is_empty()
+    {
+        missing.push("answer(string)");
+    }
+    if args.get("findings").and_then(Value::as_array).is_none() {
+        missing.push("findings(array)");
+    }
+    if args.get("confidence").and_then(Value::as_str).is_none() {
+        missing.push("confidence(high|medium|low)");
+    }
+    format!(
+        "\n结构诊断：实际解析到的顶层键 = [{}]；缺失或类型不符 = [{}]。\
+         注意：findings 是嵌套数组，statement 与 evidence 必须逐层嵌套，\
+         不能摊平到顶层；字符串值里不得混入 <findings>/<item> 等标记文本。\
+         最小正确示例：{{\"answer\": \"...\", \"findings\": [{{\"statement\": \"...\", \
+         \"evidence\": [{{\"file\": \"src/retry.rs\", \"lines\": \"7-22\"}}]}}], \
+         \"dead_ends\": [\"...\"], \"confidence\": \"high\"}}",
+        keys.join(", "),
+        missing.join(", ")
+    )
+}
+
 /// 连续无进展达到阈值 → 熔断（CS2099，故障域，非成本限制）。
 fn fuse_if_hit(streak: u32, audit: &Audit) -> CsResult<Option<CsError>> {
     if streak >= MAX_NO_PROGRESS_STREAK {
@@ -660,6 +697,34 @@ mod tests {
     use crate::llm::{ChatResponse, Usage};
     use crate::tools::Tool;
     use std::collections::VecDeque;
+
+    #[test]
+    fn schema_diagnosis_reports_flattened_m3_shape() {
+        // D016：M3 实战崩坏形状——嵌套摊平到顶层 + 字符串值内混标记文本
+        let args: Value = serde_json::json!({
+            "answer": "重试逻辑位于 src/retry.rs（</statement> 混入标记）",
+            "item": "未发现独立子模块",
+            "statement": "src/main.rs 通过 mod retry 挂载重试模块",
+            "evidence": {"item": [{"file": "src/main.rs", "lines": "2-2"}]},
+            "file": "src/retry.rs",
+            "lines": "4-4"
+        });
+        let d = schema_diagnosis(&args);
+        for k in ["answer", "item", "statement", "evidence", "file", "lines"] {
+            assert!(d.contains(k), "应回显实际顶层键 {k}: {d}");
+        }
+        assert!(d.contains("findings(array)"), "应报 findings 缺失: {d}");
+        assert!(
+            d.contains("confidence(high|medium|low)"),
+            "应报 confidence 缺失: {d}"
+        );
+        assert!(
+            !d.contains("answer(string)"),
+            "answer 存在且非空，不应误报: {d}"
+        );
+        assert!(d.contains("最小正确示例"), "应附最小示例: {d}");
+        assert!(d.contains("不得混入"), "应提示标记文本问题: {d}");
+    }
 
     struct Scripted {
         script: Mutex<VecDeque<ChatResponse>>,
