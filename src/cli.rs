@@ -105,7 +105,7 @@ impl Cli {
             profile: self.profile.clone(),
         };
         match self.command {
-            Some(Command::Config { action }) => run_config(action),
+            Some(Command::Config { action }) => run_config(action, self.profile.as_deref()),
             Some(Command::Index {
                 path,
                 rebuild,
@@ -477,7 +477,7 @@ fn index_structure_error(rebuild: bool) -> CsError {
     })
 }
 
-fn run_config(action: ConfigAction) -> i32 {
+fn run_config(action: ConfigAction, profile: Option<&str>) -> i32 {
     match action {
         ConfigAction::Path => {
             match config::global_config_path() {
@@ -487,7 +487,7 @@ fn run_config(action: ConfigAction) -> i32 {
             println!("项目: {}", config::project_config_path().display());
             0
         }
-        ConfigAction::Get { key } => match config_get(key) {
+        ConfigAction::Get { key } => match config_get(key, profile) {
             Ok(out) => {
                 println!("{out}");
                 0
@@ -664,8 +664,11 @@ fn setup_vector_layer(
     }
 }
 
-fn config_get(key: Option<String>) -> CsResult<String> {
-    let cfg = config::load(config::CliOverrides::default())?;
+fn config_get(key: Option<String>, profile: Option<&str>) -> CsResult<String> {
+    let cfg = config::load(config::CliOverrides {
+        profile: profile.map(str::to_string),
+        ..Default::default()
+    })?;
     match key.as_deref() {
         None => toml::to_string_pretty(&config::to_file_view(&cfg))
             .map_err(|e| CsError::new(INTERNAL, format!("序列化失败: {e}"))),
