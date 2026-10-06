@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Report Generation — Architecture</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #020617;
+    color: #cbd5e1;
+    font-family: 'JetBrains Mono', monospace;
+    padding: 32px;
+    min-height: 100vh;
+  }
+  .container { max-width: 1200px; margin: 0 auto; }
+  .header {
+    display: flex; align-items: center; gap: 14px;
+    margin-bottom: 24px; padding-bottom: 20px;
+    border-bottom: 1px solid #1e293b;
+  }
+  .pulse-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #22d3ee;
+    box-shadow: 0 0 12px #22d3ee;
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:0.4 } }
+  .header h1 { font-size: 18px; font-weight: 600; color: #f1f5f9; }
+  .header .sub { font-size: 11px; color: #64748b; margin-left: auto; }
+  .diagram-card {
+    background: #0b1220; border: 1px solid #1e293b;
+    border-radius: 12px; padding: 20px; margin-bottom: 24px;
+  }
+  svg { display: block; width: 100%; height: auto; font-family: 'JetBrains Mono', monospace; }
+  .footer { font-size: 9px; color: #475569; text-align: center; padding-top: 16px; }
+</style>
+</head>
+<body>
+<div class="container" id="report-container">
+  <div class="header">
+    <div class="pulse-dot"></div>
+    <h1>Report Generation — Architecture</h1>
+    <div class="sub">codesleuth · src/report.rs · src/harness.rs · src/evidence.rs · src/cli.rs</div>
+  </div>
+
+  <div class="diagram-card">
+    <svg viewBox="0 0 1100 840" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+          <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+        </pattern>
+        <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
+        </marker>
+        <marker id="arrow-rose" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#fb7185"/>
+        </marker>
+        <marker id="arrow-emerald" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#34d399"/>
+        </marker>
+        <marker id="arrow-amber" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#fbbf24"/>
+        </marker>
+        <marker id="arrow-violet" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#a78bfa"/>
+        </marker>
+      </defs>
+      <rect width="1100" height="840" fill="url(#grid)"/>
+
+      <line x1="220" y1="90" x2="438" y2="90" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+      <text x="329" y="82" fill="#94a3b8" font-size="9" text-anchor="middle">tool_calls[]</text>
+
+      <line x1="580" y1="120" x2="580" y2="198" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-emerald)"/>
+      <text x="590" y="162" fill="#34d399" font-size="9">submit_report</text>
+
+      <line x1="450" y1="120" x2="270" y2="198" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#arrow-rose)"/>
+      <text x="320" y="155" fill="#fb7185" font-size="9">prose_streak ≥ 2</text>
+
+      <line x1="700" y1="255" x2="798" y2="270" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrow-violet)"/>
+      <text x="749" y="248" fill="#a78bfa" font-size="9" text-anchor="middle">cite_seq</text>
+
+      <line x1="470" y1="310" x2="320" y2="378" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-emerald)"/>
+      <text x="395" y="340" fill="#34d399" font-size="9">construct + validate</text>
+
+      <line x1="650" y1="310" x2="670" y2="378" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#arrow-rose)"/>
+      <text x="695" y="350" fill="#fb7185" font-size="9">Err (uncited / bad conf)</text>
+
+      <line x1="160" y1="280" x2="220" y2="378" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="3,3" marker-end="url(#arrow)"/>
+      <text x="120" y="335" fill="#94a3b8" font-size="8">degraded=true</text>
+
+      <line x1="280" y1="460" x2="180" y2="518" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+      <text x="200" y="495" fill="#94a3b8" font-size="9">render()</text>
+
+      <line x1="320" y1="560" x2="398" y2="560" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+      <text x="359" y="552" fill="#94a3b8" font-size="9" text-anchor="middle">answer</text>
+
+      <line x1="610" y1="600" x2="820" y2="658" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#arrow-amber)"/>
+      <text x="720" y="625" fill="#fbbf24" font-size="8">persist .md + .json</text>
+
+      <line x1="450" y1="600" x2="200" y2="658" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#arrow-amber)"/>
+      <text x="300" y="625" fill="#fbbf24" font-size="8">kind="report"/"answer"</text>
+
+      <path d="M 610 380 C 610 200, 130 200, 130 120" stroke="#fb7185" stroke-width="1.2" stroke-dasharray="4,4" fill="none" marker-end="url(#arrow-rose)"/>
+      <text x="200" y="145" fill="#fb7185" font-size="8">rejection feedback · no_progress++</text>
+
+      <rect x="40" y="60" width="180" height="60" rx="6" fill="#0f172a"/>
+      <rect x="40" y="60" width="180" height="60" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="130" y="86" fill="white" font-size="12" font-weight="600" text-anchor="middle">LLM</text>
+      <text x="130" y="104" fill="#94a3b8" font-size="9" text-anchor="middle">tool_calls[] · answer</text>
+
+      <rect x="440" y="60" width="280" height="60" rx="6" fill="#0f172a"/>
+      <rect x="440" y="60" width="280" height="60" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="580" y="86" fill="white" font-size="12" font-weight="600" text-anchor="middle">Harness::run</text>
+      <text x="580" y="104" fill="#94a3b8" font-size="9" text-anchor="middle">src/harness.rs:74 · main loop</text>
+
+      <rect x="40" y="200" width="240" height="80" rx="6" fill="#0f172a"/>
+      <rect x="40" y="200" width="240" height="80" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="160" y="226" fill="white" font-size="12" font-weight="600" text-anchor="middle">Report::degraded_prose</text>
+      <text x="160" y="244" fill="#94a3b8" font-size="9" text-anchor="middle">src/report.rs:46</text>
+      <text x="160" y="260" fill="#94a3b8" font-size="9" text-anchor="middle">degraded=true · confidence="low"</text>
+      <text x="160" y="274" fill="#94a3b8" font-size="8" text-anchor="middle">findings=[]</text>
+
+      <rect x="400" y="200" width="300" height="110" rx="6" fill="#0f172a"/>
+      <rect x="400" y="200" width="300" height="110" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="550" y="226" fill="white" font-size="12" font-weight="600" text-anchor="middle">build_report</text>
+      <text x="550" y="244" fill="#94a3b8" font-size="9" text-anchor="middle">src/harness.rs:460</text>
+      <text x="550" y="262" fill="#94a3b8" font-size="8" text-anchor="middle">parse args · cite_seq per evidence</text>
+      <text x="550" y="276" fill="#94a3b8" font-size="8" text-anchor="middle">schema_diagnosis on reject</text>
+      <text x="550" y="290" fill="#94a3b8" font-size="8" text-anchor="middle">0 findings + 已读 → dead_ends required</text>
+      <text x="550" y="304" fill="#94a3b8" font-size="8" text-anchor="middle">→ Report::validate (src/report.rs:59)</text>
+
+      <rect x="800" y="200" width="240" height="140" rx="6" fill="#0f172a"/>
+      <rect x="800" y="200" width="240" height="140" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="920" y="226" fill="white" font-size="12" font-weight="600" text-anchor="middle">EvidenceStore</text>
+      <text x="920" y="244" fill="#94a3b8" font-size="9" text-anchor="middle">src/evidence.rs</text>
+      <text x="920" y="262" fill="#94a3b8" font-size="8" text-anchor="middle">paths → audit_seq</text>
+      <text x="920" y="278" fill="#94a3b8" font-size="8" text-anchor="middle">cite_seq(file) → Option&lt;u64&gt;</text>
+      <text x="920" y="294" fill="#94a3b8" font-size="8" text-anchor="middle">observed_paths()</text>
+      <text x="920" y="310" fill="#94a3b8" font-size="8" text-anchor="middle">observe_exact (read tool)</text>
+      <text x="920" y="326" fill="#94a3b8" font-size="8" text-anchor="middle">observe (output tokenizer)</text>
+
+      <rect x="180" y="380" width="240" height="80" rx="6" fill="#0f172a"/>
+      <rect x="180" y="380" width="240" height="80" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="300" y="406" fill="white" font-size="12" font-weight="600" text-anchor="middle">Report</text>
+      <text x="300" y="424" fill="#94a3b8" font-size="9" text-anchor="middle">src/report.rs:32</text>
+      <text x="300" y="440" fill="#94a3b8" font-size="8" text-anchor="middle">schema_version=1 · task · answer</text>
+      <text x="300" y="454" fill="#94a3b8" font-size="8" text-anchor="middle">findings · dead_ends · confidence</text>
+
+      <rect x="560" y="380" width="220" height="80" rx="6" fill="#0f172a"/>
+      <rect x="560" y="380" width="220" height="80" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="670" y="406" fill="white" font-size="12" font-weight="600" text-anchor="middle">reject_call</text>
+      <text x="670" y="424" fill="#94a3b8" font-size="9" text-anchor="middle">src/harness.rs:600</text>
+      <text x="670" y="440" fill="#94a3b8" font-size="8" text-anchor="middle">audit("tool_rejected")</text>
+      <text x="670" y="454" fill="#94a3b8" font-size="8" text-anchor="middle">no_progress += 1 → fuse</text>
+
+      <rect x="40" y="520" width="280" height="80" rx="6" fill="#0f172a"/>
+      <rect x="40" y="520" width="280" height="80" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="180" y="546" fill="white" font-size="12" font-weight="600" text-anchor="middle">Report::render_human</text>
+      <text x="180" y="564" fill="#94a3b8" font-size="9" text-anchor="middle">src/report.rs:77</text>
+      <text x="180" y="582" fill="#94a3b8" font-size="8" text-anchor="middle">确定性模板 · 任务/结论/证据/</text>
+      <text x="180" y="594" fill="#94a3b8" font-size="8" text-anchor="middle">死胡同/置信度/统计</text>
+
+      <rect x="400" y="520" width="320" height="80" rx="6" fill="#0f172a"/>
+      <rect x="400" y="520" width="320" height="80" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="560" y="546" fill="white" font-size="12" font-weight="600" text-anchor="middle">RunOutcome</text>
+      <text x="560" y="564" fill="#94a3b8" font-size="9" text-anchor="middle">src/harness.rs:25</text>
+      <text x="560" y="582" fill="#94a3b8" font-size="8" text-anchor="middle">report · answer · turns · tool_calls</text>
+      <text x="560" y="594" fill="#94a3b8" font-size="8" text-anchor="middle">audit_path · duration_ms</text>
+
+      <rect x="40" y="660" width="240" height="70" rx="6" fill="#0f172a"/>
+      <rect x="40" y="660" width="240" height="70" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+      <text x="160" y="686" fill="white" font-size="12" font-weight="600" text-anchor="middle">Audit JSONL</text>
+      <text x="160" y="704" fill="#94a3b8" font-size="9" text-anchor="middle">~/.codesleuth/{sid}.jsonl</text>
+      <text x="160" y="720" fill="#94a3b8" font-size="8" text-anchor="middle">kind="report" / "answer" / "tool_rejected"</text>
+
+      <rect x="780" y="660" width="280" height="70" rx="6" fill="#0f172a"/>
+      <rect x="780" y="660" width="280" height="70" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+      <text x="920" y="686" fill="white" font-size="12" font-weight="600" text-anchor="middle">CLI  (src/cli.rs:371, 429-460)</text>
+      <text x="920" y="704" fill="#94a3b8" font-size="9" text-anchor="middle">~/.codesleuth/reports/{sid}.md + .json</text>
+      <text x="920" y="720" fill="#94a3b8" font-size="8" text-anchor="middle">--json → stdout JSON · else human</text>
+
+      <text x="40" y="770" fill="#f1f5f9" font-size="11" font-weight="600">Legend</text>
+
+      <rect x="40" y="780" width="14" height="14" rx="2" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1"/>
+      <text x="62" y="791" fill="#cbd5e1" font-size="9">Frontend / LLM</text>
+
+      <rect x="190" y="780" width="14" height="14" rx="2" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1"/>
+      <text x="212" y="791" fill="#cbd5e1" font-size="9">Backend / harness</text>
+
+      <rect x="360" y="780" width="14" height="14" rx="2" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1"/>
+      <text x="382" y="791" fill="#cbd5e1" font-size="9">Data / schema</text>
+
+      <rect x="510" y="780" width="14" height="14" rx="2" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1"/>
+      <text x="532" y="791" fill="#cbd5e1" font-size="9">Reject / degraded</text>
+
+      <rect x="680" y="780" width="14" height="14" rx="2" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1"/>
+      <text x="702" y="791" fill="#cbd5e1" font-size="9">CLI / persistence</text>
+
+      <line x1="40" y1="815" x2="60" y2="815" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+      <text x="70" y="819" fill="#cbd5e1" font-size="9">happy path</text>
+
+      <line x1="200" y1="815" x2="220" y2="815" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#arrow-rose)"/>
+      <text x="230" y="819" fill="#cbd5e1" font-size="9">reject / degraded</text>
+
+      <line x1="380" y1="815" x2="400" y2="815" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-emerald)"/>
+      <text x="410" y="819" fill="#cbd5e1" font-size="9">validated flow</text>
+
+      <line x1="560" y1="815" x2="580" y2="815" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#arrow-amber)"/>
+      <text x="590" y="819" fill="#cbd5e1" font-size="9">persistence</text>
+
+      <line x1="700" y1="815" x2="720" y2="815" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrow-violet)"/>
+      <text x="730" y="819" fill="#cbd5e1" font-size="9">evidence lookup</text>
+    </svg>
+  </div>
+
+  <div class="footer">codesleuth · report generation · src/report.rs v1 · src/harness.rs</div>
+</div>
+</body>
+</html>

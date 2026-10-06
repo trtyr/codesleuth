@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>错误码体系架构图</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'JetBrains Mono', monospace;
+    background: #020617;
+    color: #e2e8f0;
+    padding: 24px;
+    min-height: 100vh;
+  }
+  .container { max-width: 1100px; margin: 0 auto; }
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 20px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid #1e293b;
+  }
+  .pulse-dot {
+    width: 10px; height: 10px;
+    background: #22d3ee;
+    border-radius: 50%;
+    box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.6);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.6); }
+    70% { box-shadow: 0 0 0 10px rgba(34, 211, 238, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(34, 211, 238, 0); }
+  }
+  h1 { font-size: 18px; font-weight: 600; color: #f1f5f9; }
+  .subtitle { font-size: 11px; color: #64748b; margin-top: 2px; }
+  .diagram-card {
+    background: #0f172a;
+    border: 1px solid #1e293b;
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  svg { display: block; width: 100%; height: auto; }
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+  .card {
+    background: #0f172a;
+    border: 1px solid #1e293b;
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .card-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .card h3 { font-size: 12px; font-weight: 600; color: #f1f5f9; }
+  .card ul { list-style: none; font-size: 10px; color: #94a3b8; line-height: 1.7; }
+  .card ul li::before { content: '• '; color: #64748b; }
+  .footer { text-align: center; font-size: 10px; color: #475569; padding-top: 12px; }
+  text { font-family: 'JetBrains Mono', monospace; }
+</style>
+</head>
+<body>
+<div class="container" id="report-container">
+  <div class="header">
+    <div class="pulse-dot"></div>
+    <div>
+      <h1>错误码体系架构图</h1>
+      <div class="subtitle">CSxxxx 段位 → exit code · src/errors.rs 核心 · cli 三入口捕获</div>
+    </div>
+  </div>
+
+  <div class="diagram-card">
+    <svg viewBox="0 0 1000 750" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+          <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+        </pattern>
+        <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
+        </marker>
+        <marker id="arrowhead-cyan" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#22d3ee"/>
+        </marker>
+        <marker id="arrowhead-emerald" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#34d399"/>
+        </marker>
+        <marker id="arrowhead-rose" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#fb7185"/>
+        </marker>
+      </defs>
+      <rect width="1000" height="750" fill="#020617"/>
+      <rect width="1000" height="750" fill="url(#grid)"/>
+
+      <rect x="20" y="30" width="720" height="340" rx="12" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="8,4" opacity="0.4"/>
+      <text x="40" y="50" fill="#fbbf24" font-size="10" font-weight="600">入口与错误收集层</text>
+
+      <rect x="755" y="30" width="225" height="340" rx="12" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="8,4" opacity="0.4"/>
+      <text x="775" y="50" fill="#fbbf24" font-size="10" font-weight="600">错误输出</text>
+
+      <rect x="20" y="390" width="960" height="320" rx="12" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="8,4" opacity="0.4"/>
+      <text x="40" y="410" fill="#fbbf24" font-size="10" font-weight="600">业务模块 → 段位错误分类</text>
+
+      <line x1="500" y1="100" x2="500" y2="135" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowhead-cyan)"/>
+      <text x="510" y="120" fill="#22d3ee" font-size="8">cli.run</text>
+
+      <line x1="500" y1="210" x2="500" y2="245" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrowhead-emerald)"/>
+      <text x="510" y="232" fill="#34d399" font-size="8">report_error</text>
+
+      <line x1="700" y1="250" x2="752" y2="200" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+      <text x="708" y="222" fill="#94a3b8" font-size="7">eprintln!</text>
+
+      <line x1="700" y1="285" x2="752" y2="285" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+      <text x="708" y="280" fill="#94a3b8" font-size="7">exit_code()</text>
+
+      <line x1="245" y1="420" x2="320" y2="320" stroke="#fb7185" stroke-width="1" marker-end="url(#arrowhead-rose)" stroke-dasharray="3,3" opacity="0.5"/>
+      <line x1="755" y1="420" x2="680" y2="320" stroke="#fb7185" stroke-width="1" marker-end="url(#arrowhead-rose)" stroke-dasharray="3,3" opacity="0.5"/>
+      <line x1="245" y1="510" x2="380" y2="320" stroke="#fb7185" stroke-width="1" marker-end="url(#arrowhead-rose)" stroke-dasharray="3,3" opacity="0.5"/>
+      <line x1="755" y1="510" x2="620" y2="320" stroke="#fb7185" stroke-width="1" marker-end="url(#arrowhead-rose)" stroke-dasharray="3,3" opacity="0.5"/>
+      <line x1="245" y1="600" x2="440" y2="320" stroke="#fb7185" stroke-width="1" marker-end="url(#arrowhead-rose)" stroke-dasharray="3,3" opacity="0.5"/>
+      <line x1="755" y1="600" x2="560" y2="320" stroke="#fb7185" stroke-width="1" marker-end="url(#arrowhead-rose)" stroke-dasharray="3,3" opacity="0.5"/>
+      <text x="870" y="380" fill="#fb7185" font-size="8" text-anchor="middle" opacity="0.9">return CsError</text>
+
+      <rect x="400" y="50" width="200" height="50" rx="6" fill="#0f172a"/>
+      <rect x="400" y="50" width="200" height="50" rx="6" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="500" y="73" fill="white" font-size="12" font-weight="600" text-anchor="middle">src/main.rs</text>
+      <text x="500" y="90" fill="#94a3b8" font-size="9" text-anchor="middle">session_id + init_tracing + cli.run</text>
+
+      <rect x="300" y="140" width="400" height="70" rx="6" fill="#0f172a"/>
+      <rect x="300" y="140" width="400" height="70" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="500" y="165" fill="white" font-size="12" font-weight="600" text-anchor="middle">src/cli.rs</text>
+      <text x="500" y="183" fill="#94a3b8" font-size="9" text-anchor="middle">Cli::run · run_task · run_config</text>
+      <text x="500" y="200" fill="#64748b" font-size="8" text-anchor="middle">三入口 match Err → report_error + e.exit_code()</text>
+
+      <rect x="300" y="250" width="400" height="70" rx="6" fill="#0f172a"/>
+      <rect x="300" y="250" width="400" height="70" rx="6" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="500" y="275" fill="white" font-size="12" font-weight="600" text-anchor="middle">src/errors.rs</text>
+      <text x="500" y="293" fill="#94a3b8" font-size="9" text-anchor="middle">CsCode · CsError · CsResult · report_error</text>
+      <text x="500" y="310" fill="#64748b" font-size="8" text-anchor="middle">段位→exit code 集中实现 (CS1xxx..CS5xxx)</text>
+
+      <rect x="755" y="150" width="200" height="50" rx="6" fill="#0f172a"/>
+      <rect x="755" y="150" width="200" height="50" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="855" y="173" fill="white" font-size="11" font-weight="600" text-anchor="middle">stderr</text>
+      <text x="855" y="190" fill="#94a3b8" font-size="9" text-anchor="middle">主行 + 根因 + hint (3行)</text>
+
+      <rect x="755" y="260" width="200" height="50" rx="6" fill="#0f172a"/>
+      <rect x="755" y="260" width="200" height="50" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="855" y="283" fill="white" font-size="11" font-weight="600" text-anchor="middle">process::exit</text>
+      <text x="855" y="300" fill="#94a3b8" font-size="9" text-anchor="middle">段位→1/2/3/4/5/6</text>
+
+      <rect x="40" y="420" width="410" height="70" rx="6" fill="#0f172a"/>
+      <rect x="40" y="420" width="410" height="70" rx="6" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+      <text x="50" y="442" fill="#fbbf24" font-size="10" font-weight="600">CS1000-1009 → exit 1 · USER_INPUT</text>
+      <text x="50" y="462" fill="#94a3b8" font-size="9">tools/read.rs · tools/fuzzy.rs · tools/graph.rs</text>
+      <text x="50" y="478" fill="#64748b" font-size="8">缺 path / query / symbol 触发</text>
+
+      <rect x="550" y="420" width="410" height="70" rx="6" fill="#0f172a"/>
+      <rect x="550" y="420" width="410" height="70" rx="6" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+      <text x="560" y="442" fill="#fbbf24" font-size="10" font-weight="600">CS1010-1099 → exit 2 · CONFIG</text>
+      <text x="560" y="462" fill="#94a3b8" font-size="9">src/config.rs</text>
+      <text x="560" y="478" fill="#64748b" font-size="8">parse_file / resolve_api_key / profile 校验</text>
+
+      <rect x="40" y="510" width="410" height="70" rx="6" fill="#0f172a"/>
+      <rect x="40" y="510" width="410" height="70" rx="6" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+      <text x="50" y="532" fill="#fbbf24" font-size="10" font-weight="600">CS2000-2999 → exit 3 · LLM (+ 熔断 CS2099)</text>
+      <text x="50" y="552" fill="#94a3b8" font-size="9">src/llm.rs · src/harness.rs</text>
+      <text x="50" y="568" fill="#64748b" font-size="8">UNREACHABLE / RATE_LIMITED / SERVER / BAD_RESPONSE / FUSE</text>
+
+      <rect x="550" y="510" width="410" height="70" rx="6" fill="#0f172a"/>
+      <rect x="550" y="510" width="410" height="70" rx="6" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+      <text x="560" y="532" fill="#fbbf24" font-size="10" font-weight="600">CS3000-3999 → exit 4 · REPO</text>
+      <text x="560" y="552" fill="#94a3b8" font-size="9">src/fence.rs</text>
+      <text x="560" y="568" fill="#64748b" font-size="8">NOT_FOUND / NOT_READABLE / FENCE_DENIED</text>
+
+      <rect x="40" y="600" width="410" height="70" rx="6" fill="#0f172a"/>
+      <rect x="40" y="600" width="410" height="70" rx="6" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+      <text x="50" y="622" fill="#fbbf24" font-size="10" font-weight="600">CS4000-4999 → exit 5 · INDEX</text>
+      <text x="50" y="642" fill="#94a3b8" font-size="9">bootlock · vector/store · vector/embed · vector/recall · report</text>
+      <text x="50" y="658" fill="#64748b" font-size="8">NOT_AVAILABLE / BUILD_FAILED / TIMEOUT / EMBED_FAILED / LOCKED</text>
+
+      <rect x="550" y="600" width="410" height="70" rx="6" fill="#0f172a"/>
+      <rect x="550" y="600" width="410" height="70" rx="6" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+      <text x="560" y="622" fill="#fbbf24" font-size="10" font-weight="600">CS5000-5999 → exit 6 · INTERNAL</text>
+      <text x="560" y="642" fill="#94a3b8" font-size="9">预留 · INTERNAL=5001</text>
+      <text x="560" y="658" fill="#64748b" font-size="8">非以上段位一律归 6 (default)</text>
+
+      <g transform="translate(30, 730)">
+        <text x="0" y="0" fill="#64748b" font-size="9" font-weight="600">图例:</text>
+        <rect x="55" y="-9" width="14" height="9" rx="2" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1"/>
+        <text x="73" y="0" fill="#94a3b8" font-size="8">入口</text>
+        <rect x="115" y="-9" width="14" height="9" rx="2" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1"/>
+        <text x="133" y="0" fill="#94a3b8" font-size="8">CLI 入口</text>
+        <rect x="200" y="-9" width="14" height="9" rx="2" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1"/>
+        <text x="218" y="0" fill="#94a3b8" font-size="8">错误核心</text>
+        <rect x="295" y="-9" width="14" height="9" rx="2" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1"/>
+        <text x="313" y="0" fill="#94a3b8" font-size="8">输出</text>
+        <rect x="360" y="-9" width="14" height="9" rx="2" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1"/>
+        <text x="378" y="0" fill="#94a3b8" font-size="8">错误段位</text>
+        <line x1="445" y1="-4" x2="475" y2="-4" stroke="#fb7185" stroke-width="1" stroke-dasharray="3,3"/>
+        <text x="480" y="0" fill="#94a3b8" font-size="8">CsError 流向</text>
+      </g>
+    </svg>
+  </div>
+
+  <div class="summary-grid">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-dot" style="background:#fb7185"></div>
+        <h3>错误核心 (errors.rs)</h3>
+      </div>
+      <ul>
+        <li>15 个 CS 常量按 5 段位声明</li>
+        <li>CsError 五字段: code+msg+hint+retryable+source</li>
+        <li>段位→exit code 在 exit_code() 集中</li>
+        <li>report_error 三行 eprintln! (主+根因+hint)</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-dot" style="background:#22d3ee"></div>
+        <h3>入口与捕获</h3>
+      </div>
+      <ul>
+        <li>main.rs 解析 + session_id + init_tracing</li>
+        <li>Cli::run / run_task / run_config 三向 match</li>
+        <li>Err 分支统一 report + e.exit_code()</li>
+        <li>--json 模式 stdout 仅承载报告</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-dot" style="background:#fbbf24"></div>
+        <h3>段位分类</h3>
+      </div>
+      <ul>
+        <li>CS1xxx → 1/2 (用法/配置)</li>
+        <li>CS2xxx → 3 (LLM+熔断 CS2099)</li>
+        <li>CS3xxx → 4 (目标库 fence)</li>
+        <li>CS4xxx → 5 (索引 lock/build/embed)</li>
+        <li>CS5xxx → 6 (INTERNAL 默认)</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="footer">
+    src/errors.rs:13-138 · src/cli.rs:99-511 · src/main.rs:5-12 · src/llm.rs:262-280 · src/harness.rs:653-666 · codesleuth
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>bootlock 跨进程锁 · 架构图</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'JetBrains Mono', monospace;
+    background: #020617;
+    color: #e2e8f0;
+    min-height: 100vh;
+    padding: 32px 24px;
+  }
+  .container { max-width: 1100px; margin: 0 auto; }
+  .header {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 8px; padding: 0 8px;
+  }
+  .pulse-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #fb7185;
+    box-shadow: 0 0 12px #fb7185;
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(0.85); }
+  }
+  h1 { font-size: 18px; font-weight: 700; color: white; }
+  .subtitle { font-size: 10px; color: #64748b; margin-bottom: 24px; padding: 0 8px; }
+  .diagram-card {
+    background: #0f172a;
+    border: 1px solid #1e293b;
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 24px;
+  }
+  .summary-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 16px; margin-bottom: 16px;
+  }
+  .card {
+    background: #0f172a;
+    border: 1px solid #1e293b;
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .card-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .card h3 { font-size: 11px; font-weight: 600; color: white; }
+  .card ul { list-style: none; }
+  .card li { font-size: 9px; color: #94a3b8; line-height: 1.6; padding-left: 12px; position: relative; }
+  .card li::before { content: '▸'; position: absolute; left: 0; color: #475569; }
+  .footer {
+    font-size: 8px; color: #475569; text-align: center;
+    padding: 12px; border-top: 1px solid #1e293b;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <div class="pulse-dot"></div>
+    <h1>bootlock 跨进程锁 · 组件/调用关系架构图</h1>
+  </div>
+  <div class="subtitle">仓库级引导互斥原语 · flock on .codesleuth/boot.lock · src/bootlock.rs</div>
+
+  <div class="diagram-card">
+    <svg viewBox="0 0 1000 680" xmlns="http://www.w3.org/2000/svg" style="width:100%; height:auto; display:block;">
+      <defs>
+        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+          <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+        </pattern>
+        <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
+        </marker>
+        <marker id="arrowhead-rose" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#fb7185"/>
+        </marker>
+        <marker id="arrowhead-emerald" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#34d399"/>
+        </marker>
+        <marker id="arrowhead-cyan" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#22d3ee"/>
+        </marker>
+        <marker id="arrowhead-violet" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#a78bfa"/>
+        </marker>
+        <marker id="arrowhead-amber" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#fbbf24"/>
+        </marker>
+      </defs>
+      <rect width="1000" height="680" fill="url(#grid)"/>
+
+      <!-- ARROWS (drawn first, behind components) -->
+      <line x1="150" y1="140" x2="450" y2="200" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowhead-cyan)"/>
+      <line x1="500" y1="140" x2="500" y2="200" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowhead-cyan)"/>
+      <line x1="850" y1="140" x2="550" y2="200" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowhead-cyan)"/>
+      <line x1="500" y1="250" x2="500" y2="310" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+      <line x1="380" y1="360" x2="220" y2="280" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#arrowhead-rose)"/>
+      <line x1="620" y1="360" x2="780" y2="280" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrowhead-emerald)"/>
+      <line x1="500" y1="410" x2="500" y2="470" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#arrowhead-rose)"/>
+      <line x1="410" y1="500" x2="240" y2="500" stroke="#fb7185" stroke-width="1.5" marker-end="url(#arrowhead-rose)"/>
+      <line x1="590" y1="500" x2="760" y2="500" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrowhead-violet)"/>
+
+      <!-- COMPONENTS -->
+
+      <!-- Section labels -->
+      <text x="500" y="32" fill="#94a3b8" font-size="9" text-anchor="middle" font-weight="600">▾ ENTRY POINTS · 3 CALL SITES (acquire_guard)</text>
+      <text x="500" y="187" fill="#94a3b8" font-size="9" text-anchor="middle" font-weight="600">▾ MODULE MOUNT</text>
+      <text x="500" y="297" fill="#94a3b8" font-size="9" text-anchor="middle" font-weight="600">▾ CORE MODULE</text>
+      <text x="500" y="455" fill="#94a3b8" font-size="9" text-anchor="middle" font-weight="600">▾ LOCK PRIMITIVES</text>
+      <text x="500" y="582" fill="#94a3b8" font-size="9" text-anchor="middle" font-weight="600">▾ DECISION CONTRACT</text>
+
+      <!-- Entry 1: tools/graph.rs:78 -->
+      <rect x="60" y="50" width="180" height="90" rx="6" fill="#0f172a"/>
+      <rect x="60" y="50" width="180" height="90" rx="6" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="150" y="70" fill="white" font-size="12" font-weight="600" text-anchor="middle">tools/graph.rs</text>
+      <text x="150" y="86" fill="#94a3b8" font-size="9" text-anchor="middle">:78 CodegraphEngine</text>
+      <text x="150" y="102" fill="#94a3b8" font-size="8" text-anchor="middle">init / index --force</text>
+      <text x="150" y="118" fill="#64748b" font-size="7" text-anchor="middle">drop(guard) → McpClient::spawn</text>
+      <text x="150" y="132" fill="#64748b" font-size="7" text-anchor="middle">tools/graph.rs:83-90</text>
+
+      <!-- Entry 2: cli.rs:162 -->
+      <rect x="410" y="50" width="180" height="90" rx="6" fill="#0f172a"/>
+      <rect x="410" y="50" width="180" height="90" rx="6" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="500" y="70" fill="white" font-size="12" font-weight="600" text-anchor="middle">cli.rs</text>
+      <text x="500" y="86" fill="#94a3b8" font-size="9" text-anchor="middle">:162 run_index_vector</text>
+      <text x="500" y="102" fill="#94a3b8" font-size="8" text-anchor="middle">Command::Index { vector }</text>
+      <text x="500" y="118" fill="#64748b" font-size="7" text-anchor="middle">manual --vector build</text>
+      <text x="500" y="132" fill="#64748b" font-size="7" text-anchor="middle">cli.rs:132-182</text>
+
+      <!-- Entry 3: cli.rs:565 -->
+      <rect x="760" y="50" width="180" height="90" rx="6" fill="#0f172a"/>
+      <rect x="760" y="50" width="180" height="90" rx="6" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="850" y="70" fill="white" font-size="12" font-weight="600" text-anchor="middle">cli.rs</text>
+      <text x="850" y="86" fill="#94a3b8" font-size="9" text-anchor="middle">:565 setup_vector_layer</text>
+      <text x="850" y="102" fill="#94a3b8" font-size="8" text-anchor="middle">run-time fallback</text>
+      <text x="850" y="118" fill="#64748b" font-size="7" text-anchor="middle">drop(vguard) → VectorStore::open</text>
+      <text x="850" y="132" fill="#64748b" font-size="7" text-anchor="middle">cli.rs:565-595</text>
+
+      <!-- Outcome: Err INDEX_LOCKED (left side) -->
+      <rect x="40" y="200" width="180" height="80" rx="6" fill="#0f172a"/>
+      <rect x="40" y="200" width="180" height="80" rx="6" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,4"/>
+      <text x="130" y="220" fill="white" font-size="12" font-weight="600" text-anchor="middle">Err(INDEX_LOCKED)</text>
+      <text x="130" y="238" fill="#94a3b8" font-size="9" text-anchor="middle">CS4016 · exit_code 5</text>
+      <text x="130" y="254" fill="#94a3b8" font-size="8" text-anchor="middle">Lost / 超时 / io::Error</text>
+      <text x="130" y="270" fill="#64748b" font-size="7" text-anchor="middle">cli.rs:265-268, 321-324</text>
+
+      <!-- lib.rs:7 mount -->
+      <rect x="410" y="200" width="180" height="50" rx="6" fill="#0f172a"/>
+      <rect x="410" y="200" width="180" height="50" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="500" y="222" fill="white" font-size="12" font-weight="600" text-anchor="middle">lib.rs:7</text>
+      <text x="500" y="238" fill="#94a3b8" font-size="9" text-anchor="middle">pub mod bootlock</text>
+
+      <!-- Outcome: Ok BootLockGuard (right side) -->
+      <rect x="780" y="200" width="180" height="80" rx="6" fill="#0f172a"/>
+      <rect x="780" y="200" width="180" height="80" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="870" y="220" fill="white" font-size="12" font-weight="600" text-anchor="middle">Ok(BootLockGuard)</text>
+      <text x="870" y="238" fill="#94a3b8" font-size="9" text-anchor="middle">Won → 引导段干活</text>
+      <text x="870" y="254" fill="#94a3b8" font-size="8" text-anchor="middle">段结束 drop(guard) 释放</text>
+      <text x="870" y="270" fill="#64748b" font-size="7" text-anchor="middle">→ serve / VectorStore::open</text>
+
+      <!-- bootlock.rs core module -->
+      <rect x="350" y="310" width="300" height="100" rx="6" fill="#0f172a"/>
+      <rect x="350" y="310" width="300" height="100" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="500" y="330" fill="white" font-size="12" font-weight="600" text-anchor="middle">bootlock.rs</text>
+      <text x="500" y="348" fill="#94a3b8" font-size="9" text-anchor="middle">acquire()  →  3-state: Won / Lost / timeout</text>
+      <text x="500" y="364" fill="#94a3b8" font-size="9" text-anchor="middle">acquire_guard()  →  2-state: Ok / Err</text>
+      <text x="500" y="380" fill="#64748b" font-size="8" text-anchor="middle">DEFAULT_TIMEOUT=300s · POLL_INTERVAL=500ms</text>
+      <text x="500" y="394" fill="#64748b" font-size="7" text-anchor="middle">WouldBlock → 轮询 / io::Error → INDEX_LOCKED</text>
+      <text x="500" y="406" fill="#64748b" font-size="7" text-anchor="middle">src/bootlock.rs:50-129</text>
+
+      <!-- BootLockGuard -->
+      <rect x="60" y="470" width="180" height="60" rx="6" fill="#0f172a"/>
+      <rect x="60" y="470" width="180" height="60" rx="6" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="150" y="490" fill="white" font-size="12" font-weight="600" text-anchor="middle">BootLockGuard</text>
+      <text x="150" y="506" fill="#94a3b8" font-size="8" text-anchor="middle">Drop → let _ = self.file.unlock()</text>
+      <text x="150" y="520" fill="#64748b" font-size="7" text-anchor="middle">src/bootlock.rs:38-48 · 静默双保险</text>
+
+      <!-- boot.lock file -->
+      <rect x="410" y="470" width="180" height="60" rx="6" fill="#0f172a"/>
+      <rect x="410" y="470" width="180" height="60" rx="6" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="500" y="490" fill="white" font-size="12" font-weight="600" text-anchor="middle">.codesleuth/boot.lock</text>
+      <text x="500" y="506" fill="#94a3b8" font-size="8" text-anchor="middle">File::try_lock (flock)</text>
+      <text x="500" y="520" fill="#64748b" font-size="7" text-anchor="middle">src/bootlock.rs:52-70 · 写死路径</text>
+
+      <!-- std::fs::File -->
+      <rect x="760" y="470" width="180" height="60" rx="6" fill="#0f172a"/>
+      <rect x="760" y="470" width="180" height="60" rx="6" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="850" y="490" fill="white" font-size="12" font-weight="600" text-anchor="middle">std::fs::File</text>
+      <text x="850" y="506" fill="#94a3b8" font-size="8" text-anchor="middle">Rust 1.89 stable</text>
+      <text x="850" y="520" fill="#64748b" font-size="7" text-anchor="middle">内核放锁 · 无陈旧锁</text>
+
+      <!-- D014 decision contract -->
+      <rect x="280" y="600" width="440" height="40" rx="6" fill="#0f172a"/>
+      <rect x="280" y="600" width="440" height="40" rx="6" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1" stroke-dasharray="4,2"/>
+      <text x="500" y="618" fill="#fbbf24" font-size="10" font-weight="600" text-anchor="middle">D014 · decisions/014-index-boot-lock.md</text>
+      <text x="500" y="632" fill="#fbbf24" font-size="7" text-anchor="middle">「输者死不降级」· graph 层 + 向量层共用</text>
+
+      <!-- Arrow annotations -->
+      <text x="305" y="178" fill="#22d3ee" font-size="7" font-weight="500">acquire_guard()</text>
+      <text x="505" y="287" fill="#94a3b8" font-size="7" font-weight="500">mount</text>
+      <text x="270" y="325" fill="#fb7185" font-size="7" font-weight="500">Err(INDEX_LOCKED)</text>
+      <text x="660" y="325" fill="#34d399" font-size="7" font-weight="500">Ok(guard)</text>
+      <text x="505" y="448" fill="#fb7185" font-size="7" font-weight="500">try_lock</text>
+      <text x="340" y="495" fill="#fb7185" font-size="7" font-weight="500">File</text>
+      <text x="645" y="495" fill="#a78bfa" font-size="7" font-weight="500">try_lock</text>
+    </svg>
+  </div>
+
+  <div class="summary-grid">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-dot" style="background:#fb7185"></div>
+        <h3>Lock Contract</h3>
+      </div>
+      <ul>
+        <li>flock on &lt;repo&gt;/.codesleuth/boot.lock</li>
+        <li>三态 acquire → 二态 acquire_guard</li>
+        <li>Drop 静默 unlock（双保险）</li>
+        <li>不跨 LLM 调用、不罩 serve</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-dot" style="background:#22d3ee"></div>
+        <h3>Call Sites (3)</h3>
+      </div>
+      <ul>
+        <li>tools/graph.rs:78 codegraph bootstrap</li>
+        <li>cli.rs:162 index --vector</li>
+        <li>cli.rs:565 setup_vector_layer fallback</li>
+        <li>共锁 / 同超时 / 同错误码</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-dot" style="background:#34d399"></div>
+        <h3>Outcomes</h3>
+      </div>
+      <ul>
+        <li>Won → 引导段 drop(guard) → serve/open</li>
+        <li>Lost / 超时 → CS4016 INDEX_LOCKED</li>
+        <li>exit_code 5 (CS4xxx 段位)</li>
+        <li>IO 错误 → REPO_NOT_READABLE exit 4</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="footer">bootlock 跨进程锁 · 安全与防护 · codesleuth 深挖详稿 · src/bootlock.rs · D014</div>
+</div>
+</body>
+</html>

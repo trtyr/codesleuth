@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>codesleuth · config subcommand architecture</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #020617; color: #e2e8f0; font-family: 'JetBrains Mono', monospace; padding: 24px; min-height: 100vh; }
+  .container { max-width: 1280px; margin: 0 auto; }
+  .header { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; padding: 20px 28px; background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; }
+  .pulse-dot { width: 10px; height: 10px; border-radius: 50%; background: #34d399; box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.6); animation: pulse 2s infinite; flex-shrink: 0; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.6); } 70% { box-shadow: 0 0 0 12px rgba(52, 211, 153, 0); } 100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); } }
+  .header-text h1 { font-size: 18px; font-weight: 600; color: #f1f5f9; margin-bottom: 4px; }
+  .header-text .subtitle { font-size: 11px; color: #94a3b8; }
+  .diagram-card { background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+  .summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 20px; }
+  .card { background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; padding: 20px; }
+  .card-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .card-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .card h3 { font-size: 13px; font-weight: 600; color: #f1f5f9; }
+  .card ul { list-style: none; }
+  .card li { font-size: 11px; color: #cbd5e1; padding: 5px 0; line-height: 1.5; border-bottom: 1px solid #1e293b; }
+  .card li:last-child { border-bottom: none; }
+  .card li strong { color: #f1f5f9; }
+  .footer { text-align: center; font-size: 10px; color: #64748b; padding: 12px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <div class="pulse-dot"></div>
+    <div class="header-text">
+      <h1>config subcommand · CLI ↔ command layer</h1>
+      <div class="subtitle">codesleuth · src/cli.rs + src/config.rs + src/errors.rs</div>
+    </div>
+  </div>
+
+  <div class="diagram-card">
+    <svg viewBox="0 0 1200 900" xmlns="http://www.w3.org/2000/svg" style="width:100%; height:auto; display:block;">
+      <defs>
+        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+          <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+        </pattern>
+        <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
+        </marker>
+        <marker id="arrowhead-rose" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#fb7185"/>
+        </marker>
+      </defs>
+
+      <rect width="1200" height="900" fill="url(#grid)"/>
+
+      <!-- ============== REGION BOUNDARIES ============== -->
+      <rect x="20" y="20" width="470" height="640" rx="12" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="8,4" opacity="0.55"/>
+      <text x="40" y="42" fill="#fbbf24" font-size="10" font-weight="600">src/cli.rs — dispatch &amp; handlers</text>
+
+      <rect x="510" y="20" width="490" height="640" rx="12" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="8,4" opacity="0.55"/>
+      <text x="530" y="42" fill="#fbbf24" font-size="10" font-weight="600">src/config.rs — engine &amp; key table</text>
+
+      <rect x="1020" y="20" width="160" height="640" rx="12" fill="none" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,4" opacity="0.6"/>
+      <text x="1035" y="42" fill="#fb7185" font-size="10" font-weight="600">src/errors.rs</text>
+
+      <rect x="20" y="680" width="1160" height="140" rx="12" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="8,4" opacity="0.55"/>
+      <text x="40" y="702" fill="#fbbf24" font-size="10" font-weight="600">disk + I/O</text>
+
+      <!-- ============== ARROWS (behind boxes) ============== -->
+      <!-- main → Cli -->
+      <path d="M 250 110 L 250 148" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)"/>
+      <!-- Cli → Cli::run -->
+      <path d="M 250 232 L 250 258" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)"/>
+      <!-- Cli::run → Command::Config -->
+      <path d="M 250 322 L 250 348" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)"/>
+      <!-- Command::Config → ConfigAction -->
+      <path d="M 250 412 L 250 438" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)"/>
+      <!-- ConfigAction → run_config -->
+      <path d="M 250 502 L 250 518" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)"/>
+      <text x="258" y="514" fill="#94a3b8" font-size="7">dispatch</text>
+
+      <!-- run_config → config_get / config_set -->
+      <path d="M 190 582 L 150 608" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)"/>
+      <path d="M 310 582 L 350 608" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)"/>
+      <text x="200" y="600" fill="#94a3b8" font-size="7">Get</text>
+      <text x="318" y="600" fill="#94a3b8" font-size="7">Set</text>
+
+      <!-- run_config → stdout (Path branch) -->
+      <path d="M 400 550 C 480 540, 540 540, 1100 760" stroke="#64748b" stroke-width="1.2" fill="none" stroke-dasharray="3,3" marker-end="url(#arrowhead)"/>
+      <text x="600" y="530" fill="#94a3b8" font-size="7">Path → print</text>
+
+      <!-- config_get → config::load -->
+      <path d="M 240 635 C 350 660, 450 200, 540 142" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)"/>
+      <text x="380" y="660" fill="#94a3b8" font-size="7">load(profile)</text>
+
+      <!-- config_set → global_config_path -->
+      <path d="M 460 635 C 500 600, 540 590, 600 608" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)"/>
+      <text x="490" y="620" fill="#94a3b8" font-size="7">path</text>
+
+      <!-- config_set → parse_file -->
+      <path d="M 460 625 C 600 580, 800 580, 920 608" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)"/>
+      <text x="700" y="572" fill="#94a3b8" font-size="7">parse existing</text>
+
+      <!-- config::load → load_layered -->
+      <path d="M 720 142 L 720 188" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)"/>
+
+      <!-- load_layered → apply_profile (D017) -->
+      <path d="M 650 262 L 650 288" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)"/>
+      <text x="660" y="280" fill="#94a3b8" font-size="7">D017</text>
+
+      <!-- load_layered → merge_file/merge_cli -->
+      <path d="M 820 262 L 820 378" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)"/>
+      <text x="830" y="320" fill="#94a3b8" font-size="7">file + cli</text>
+
+      <!-- config_key_table → apply_set -->
+      <path d="M 700 510 L 778 488" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)"/>
+      <!-- config_key_table → resolved_get -->
+      <path d="M 720 510 L 902 488" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)"/>
+      <!-- config_key_table → keys_hint -->
+      <path d="M 700 520 L 902 538" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)"/>
+
+      <!-- parse_file → apply_set -->
+      <path d="M 905 580 L 830 502" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)"/>
+      <text x="880" y="540" fill="#94a3b8" font-size="7">mut</text>
+
+      <!-- config_get → to_file_view (no key) -->
+      <path d="M 200 660 C 380 700, 700 640, 820 632" stroke="#64748b" stroke-width="1.2" fill="none" stroke-dasharray="3,3" marker-end="url(#arrowhead)"/>
+      <text x="500" y="700" fill="#94a3b8" font-size="7">no key → to_file_view (full dump)</text>
+
+      <!-- config_get → resolved_get (with key) -->
+      <path d="M 200 650 C 500 720, 800 600, 920 490" stroke="#64748b" stroke-width="1.2" fill="none" stroke-dasharray="3,3" marker-end="url(#arrowhead)"/>
+      <text x="650" y="720" fill="#94a3b8" font-size="7">with key → resolved_get</text>
+
+      <!-- to_file_view → stdout -->
+      <path d="M 980 600 C 1040 620, 1080 680, 1100 718" stroke="#64748b" stroke-width="1.2" fill="none" marker-end="url(#arrowhead)"/>
+      <text x="990" y="660" fill="#94a3b8" font-size="7">toml</text>
+
+      <!-- config_key_table → stdout (resolved value) -->
+      <path d="M 930 480 C 1020 520, 1080 600, 1100 718" stroke="#64748b" stroke-width="1.2" fill="none" marker-end="url(#arrowhead)"/>
+      <text x="1010" y="560" fill="#94a3b8" font-size="7">value</text>
+
+      <!-- File reads -->
+      <!-- global file → parse_file -->
+      <path d="M 175 718 C 175 690, 600 660, 920 632" stroke="#a78bfa" stroke-width="1.2" fill="none" stroke-dasharray="4,3" marker-end="url(#arrowhead)"/>
+      <text x="450" y="690" fill="#a78bfa" font-size="7">read TOML</text>
+      <!-- project file → parse_file -->
+      <path d="M 710 718 C 780 680, 880 640, 925 632" stroke="#a78bfa" stroke-width="1.2" fill="none" stroke-dasharray="4,3" marker-end="url(#arrowhead)"/>
+
+      <!-- Config::default → load_layered (base) -->
+      <path d="M 880 718 C 800 600, 760 400, 700 262" stroke="#94a3b8" stroke-width="1.2" fill="none" stroke-dasharray="4,3" marker-end="url(#arrowhead)"/>
+      <text x="800" y="500" fill="#94a3b8" font-size="7">default</text>
+
+      <!-- apply_set → write back to global file -->
+      <path d="M 780 500 C 600 600, 300 700, 200 718" stroke="#a78bfa" stroke-width="1.2" fill="none" stroke-dasharray="4,3" marker-end="url(#arrowhead)"/>
+      <text x="400" y="680" fill="#a78bfa" font-size="7">toml::to_string_pretty → std::fs::write</text>
+
+      <!-- Error flows (rose, dashed) -->
+      <path d="M 200 660 C 500 560, 900 460, 1080 410" stroke="#fb7185" stroke-width="1.4" fill="none" stroke-dasharray="4,3" marker-end="url(#arrowhead-rose)"/>
+      <text x="700" y="540" fill="#fb7185" font-size="7">error</text>
+      <path d="M 460 660 C 700 540, 950 460, 1080 410" stroke="#fb7185" stroke-width="1.4" fill="none" stroke-dasharray="4,3" marker-end="url(#arrowhead-rose)"/>
+      <path d="M 900 348 C 1000 280, 1050 200, 1085 162" stroke="#fb7185" stroke-width="1.4" fill="none" stroke-dasharray="4,3" marker-end="url(#arrowhead-rose)"/>
+      <text x="980" y="280" fill="#fb7185" font-size="7">unknown profile → CS1012</text>
+      <path d="M 860 475 C 950 380, 1040 240, 1080 162" stroke="#fb7185" stroke-width="1.4" fill="none" stroke-dasharray="4,3" marker-end="url(#arrowhead-rose)"/>
+      <text x="970" y="380" fill="#fb7185" font-size="7">unknown key</text>
+      <path d="M 1080 162 L 1080 178" stroke="#fb7185" stroke-width="1.4" fill="none" marker-end="url(#arrowhead-rose)"/>
+      <path d="M 1100 452 L 1100 468" stroke="#fb7185" stroke-width="1.4" fill="none" marker-end="url(#arrowhead-rose)"/>
+      <path d="M 1100 532 L 1100 548" stroke="#fb7185" stroke-width="1.4" fill="none" marker-end="url(#arrowhead-rose)"/>
+      <!-- exit → main -->
+      <path d="M 1100 532 C 800 600, 400 200, 250 112" stroke="#fb7185" stroke-width="1.2" fill="none" stroke-dasharray="4,3" marker-end="url(#arrowhead-rose)"/>
+      <text x="600" y="350" fill="#fb7185" font-size="7">process::exit(code)</text>
+
+      <!-- ============== COMPONENT BOXES (opaque mask + transparent fill) ============== -->
+
+      <!-- 1. main() -->
+      <rect x="170" y="60" width="160" height="50" rx="6" fill="#0f172a"/>
+      <rect x="170" y="60" width="160" height="50" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="250" y="80" fill="white" font-size="11" font-weight="600" text-anchor="middle">main()</text>
+      <text x="250" y="95" fill="#94a3b8" font-size="8" text-anchor="middle">src/main.rs:1-12</text>
+
+      <!-- 2. Cli struct -->
+      <rect x="60" y="150" width="380" height="80" rx="6" fill="#0f172a"/>
+      <rect x="60" y="150" width="380" height="80" rx="6" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="250" y="172" fill="white" font-size="12" font-weight="600" text-anchor="middle">Cli (clap Parser)</text>
+      <text x="250" y="190" fill="#94a3b8" font-size="9" text-anchor="middle">--base-url · --model · --profile</text>
+      <text x="250" y="206" fill="#94a3b8" font-size="9" text-anchor="middle">command: Command</text>
+      <text x="250" y="221" fill="#64748b" font-size="7" text-anchor="middle">src/cli.rs:14-58</text>
+
+      <!-- 3. Cli::run -->
+      <rect x="140" y="260" width="220" height="60" rx="6" fill="#0f172a"/>
+      <rect x="140" y="260" width="220" height="60" rx="6" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="250" y="282" fill="white" font-size="11" font-weight="600" text-anchor="middle">Cli::run</text>
+      <text x="250" y="298" fill="#94a3b8" font-size="8" text-anchor="middle">match self.command</text>
+      <text x="250" y="311" fill="#64748b" font-size="7" text-anchor="middle">src/cli.rs:99-130</text>
+
+      <!-- 4. Command::Config -->
+      <rect x="140" y="350" width="220" height="60" rx="6" fill="#0f172a"/>
+      <rect x="140" y="350" width="220" height="60" rx="6" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="250" y="372" fill="white" font-size="11" font-weight="600" text-anchor="middle">Command::Config</text>
+      <text x="250" y="388" fill="#94a3b8" font-size="8" text-anchor="middle">action: ConfigAction</text>
+      <text x="250" y="401" fill="#64748b" font-size="7" text-anchor="middle">src/cli.rs:60-77</text>
+
+      <!-- 5. ConfigAction -->
+      <rect x="60" y="440" width="380" height="60" rx="6" fill="#0f172a"/>
+      <rect x="60" y="440" width="380" height="60" rx="6" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="250" y="462" fill="white" font-size="11" font-weight="600" text-anchor="middle">ConfigAction (clap Subcommand)</text>
+      <text x="250" y="478" fill="#94a3b8" font-size="8" text-anchor="middle">Get{key:Option} | Set{key,value} | Path</text>
+      <text x="250" y="491" fill="#64748b" font-size="7" text-anchor="middle">src/cli.rs:80-96</text>
+
+      <!-- 6. run_config -->
+      <rect x="100" y="520" width="300" height="60" rx="6" fill="#0f172a"/>
+      <rect x="100" y="520" width="300" height="60" rx="6" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="250" y="542" fill="white" font-size="11" font-weight="600" text-anchor="middle">run_config</text>
+      <text x="250" y="558" fill="#94a3b8" font-size="8" text-anchor="middle">dispatch by ConfigAction</text>
+      <text x="250" y="571" fill="#64748b" font-size="7" text-anchor="middle">src/cli.rs:480-511</text>
+
+      <!-- 7. config_get -->
+      <rect x="60" y="610" width="180" height="50" rx="6" fill="#0f172a"/>
+      <rect x="60" y="610" width="180" height="50" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="150" y="630" fill="white" font-size="11" font-weight="600" text-anchor="middle">config_get</text>
+      <text x="150" y="646" fill="#94a3b8" font-size="8" text-anchor="middle">load + get/print</text>
+      <text x="150" y="657" fill="#64748b" font-size="7" text-anchor="middle">src/cli.rs:667-678</text>
+
+      <!-- 8. config_set -->
+      <rect x="280" y="610" width="180" height="50" rx="6" fill="#0f172a"/>
+      <rect x="280" y="610" width="180" height="50" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="370" y="630" fill="white" font-size="11" font-weight="600" text-anchor="middle">config_set</text>
+      <text x="370" y="646" fill="#94a3b8" font-size="8" text-anchor="middle">path+parse+apply+write</text>
+      <text x="370" y="657" fill="#64748b" font-size="7" text-anchor="middle">src/cli.rs:680-701</text>
+
+      <!-- Right: Config Engine -->
+
+      <!-- 9. config::load -->
+      <rect x="540" y="60" width="430" height="80" rx="6" fill="#0f172a"/>
+      <rect x="540" y="60" width="430" height="80" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="755" y="82" fill="white" font-size="12" font-weight="600" text-anchor="middle">config::load</text>
+      <text x="755" y="100" fill="#94a3b8" font-size="9" text-anchor="middle">layered merge entry · CliOverrides{ profile, ..Default }</text>
+      <text x="755" y="115" fill="#94a3b8" font-size="8" text-anchor="middle">default ← [global, project] ← profile ← CLI</text>
+      <text x="755" y="130" fill="#64748b" font-size="7" text-anchor="middle">src/config.rs:191-223</text>
+
+      <!-- 10. load_layered -->
+      <rect x="540" y="190" width="430" height="70" rx="6" fill="#0f172a"/>
+      <rect x="540" y="190" width="430" height="70" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="755" y="212" fill="white" font-size="11" font-weight="600" text-anchor="middle">load_layered (pure)</text>
+      <text x="755" y="228" fill="#94a3b8" font-size="8" text-anchor="middle">Config::default → [global, project] loop</text>
+      <text x="755" y="241" fill="#94a3b8" font-size="8" text-anchor="middle">→ apply_profile → merge_cli</text>
+      <text x="755" y="254" fill="#64748b" font-size="7" text-anchor="middle">src/config.rs:206-223</text>
+
+      <!-- 11. apply_profile (D017) -->
+      <rect x="540" y="290" width="430" height="60" rx="6" fill="#0f172a"/>
+      <rect x="540" y="290" width="430" height="60" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="755" y="312" fill="white" font-size="11" font-weight="600" text-anchor="middle">apply_profile (D017 — before merge_cli)</text>
+      <text x="755" y="328" fill="#94a3b8" font-size="8" text-anchor="middle">unknown → CONFIG_INVALID + list profiles</text>
+      <text x="755" y="343" fill="#64748b" font-size="7" text-anchor="middle">src/config.rs:225-259</text>
+
+      <!-- 12. merge_file / merge_cli -->
+      <rect x="540" y="380" width="430" height="60" rx="6" fill="#0f172a"/>
+      <rect x="540" y="380" width="430" height="60" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="755" y="402" fill="white" font-size="11" font-weight="600" text-anchor="middle">merge_file / merge_cli</text>
+      <text x="755" y="418" fill="#94a3b8" font-size="8" text-anchor="middle">per-field Option override (absent → skip)</text>
+      <text x="755" y="433" fill="#64748b" font-size="7" text-anchor="middle">src/config.rs:261-310</text>
+
+      <!-- 13. config_key_table -->
+      <rect x="540" y="470" width="200" height="80" rx="6" fill="#0f172a"/>
+      <rect x="540" y="470" width="200" height="80" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="640" y="492" fill="white" font-size="11" font-weight="600" text-anchor="middle">config_key_table</text>
+      <text x="640" y="508" fill="#94a3b8" font-size="8" text-anchor="middle">13 写键 + 1 只读</text>
+      <text x="640" y="521" fill="#94a3b8" font-size="8" text-anchor="middle">llm.profile (RO)</text>
+      <text x="640" y="536" fill="#64748b" font-size="7" text-anchor="middle">src/config.rs:312-320</text>
+
+      <!-- 14. apply_set -->
+      <rect x="760" y="450" width="100" height="50" rx="6" fill="#0f172a"/>
+      <rect x="760" y="450" width="100" height="50" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="810" y="470" fill="white" font-size="10" font-weight="600" text-anchor="middle">apply_set</text>
+      <text x="810" y="486" fill="#fb7185" font-size="7" text-anchor="middle">CS1012 miss</text>
+      <text x="810" y="497" fill="#64748b" font-size="6" text-anchor="middle">:331-466</text>
+
+      <!-- 15. resolved_get -->
+      <rect x="880" y="450" width="100" height="50" rx="6" fill="#0f172a"/>
+      <rect x="880" y="450" width="100" height="50" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="930" y="470" fill="white" font-size="10" font-weight="600" text-anchor="middle">resolved_get</text>
+      <text x="930" y="486" fill="#fb7185" font-size="7" text-anchor="middle">CS1012 miss</text>
+      <text x="930" y="497" fill="#64748b" font-size="6" text-anchor="middle">:469-475</text>
+
+      <!-- 16. keys_hint -->
+      <rect x="880" y="520" width="100" height="30" rx="6" fill="#0f172a"/>
+      <rect x="880" y="520" width="100" height="30" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="930" y="538" fill="white" font-size="9" font-weight="600" text-anchor="middle">keys_hint</text>
+      <text x="930" y="548" fill="#64748b" font-size="6" text-anchor="middle">:477-485</text>
+
+      <!-- 17. to_file_view -->
+      <rect x="760" y="570" width="220" height="60" rx="6" fill="#0f172a"/>
+      <rect x="760" y="570" width="220" height="60" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="870" y="592" fill="white" font-size="11" font-weight="600" text-anchor="middle">to_file_view</text>
+      <text x="870" y="608" fill="#94a3b8" font-size="8" text-anchor="middle">Config → FileConfig projection</text>
+      <text x="870" y="621" fill="#64748b" font-size="7" text-anchor="middle">src/config.rs:499-524</text>
+
+      <!-- 18. global_config_path -->
+      <rect x="540" y="580" width="120" height="50" rx="6" fill="#0f172a"/>
+      <rect x="540" y="580" width="120" height="50" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="600" y="600" fill="white" font-size="10" font-weight="600" text-anchor="middle">global_config_path</text>
+      <text x="600" y="614" fill="#94a3b8" font-size="7" text-anchor="middle">~/.codesleuth/</text>
+      <text x="600" y="625" fill="#64748b" font-size="6" text-anchor="middle">:159-162</text>
+
+      <!-- 19. project_config_path -->
+      <rect x="680" y="580" width="140" height="50" rx="6" fill="#0f172a"/>
+      <rect x="680" y="580" width="140" height="50" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="750" y="600" fill="white" font-size="10" font-weight="600" text-anchor="middle">project_config_path</text>
+      <text x="750" y="614" fill="#94a3b8" font-size="7" text-anchor="middle">.codesleuth/ → codesleuth</text>
+      <text x="750" y="625" fill="#64748b" font-size="6" text-anchor="middle">:169-204</text>
+
+      <!-- 20. parse_file -->
+      <rect x="900" y="580" width="80" height="50" rx="6" fill="#0f172a"/>
+      <rect x="900" y="580" width="80" height="50" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="940" y="600" fill="white" font-size="10" font-weight="600" text-anchor="middle">parse_file</text>
+      <text x="940" y="614" fill="#94a3b8" font-size="7" text-anchor="middle">toml::from_str</text>
+      <text x="940" y="625" fill="#64748b" font-size="6" text-anchor="middle">:178-188</text>
+
+      <!-- ===== Errors region ===== -->
+
+      <!-- CsError / CsCode -->
+      <rect x="1035" y="60" width="130" height="100" rx="6" fill="#0f172a"/>
+      <rect x="1035" y="60" width="130" height="100" rx="6" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="1100" y="80" fill="white" font-size="11" font-weight="600" text-anchor="middle">CsError</text>
+      <text x="1100" y="96" fill="#94a3b8" font-size="8" text-anchor="middle">CsCode</text>
+      <text x="1100" y="113" fill="#94a3b8" font-size="8" text-anchor="middle">段位 → exit code</text>
+      <text x="1100" y="130" fill="#cbd5e1" font-size="7" text-anchor="middle">CS1xxx→1 · CS101x→2</text>
+      <text x="1100" y="145" fill="#cbd5e1" font-size="7" text-anchor="middle">CS2xxx→3 · 3xxx→4</text>
+      <text x="1100" y="158" fill="#64748b" font-size="6" text-anchor="middle">src/errors.rs:10-115</text>
+
+      <!-- CS code map -->
+      <rect x="1035" y="180" width="130" height="170" rx="6" fill="#0f172a"/>
+      <rect x="1035" y="180" width="130" height="170" rx="6" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="1100" y="200" fill="white" font-size="10" font-weight="600" text-anchor="middle">CS code map</text>
+      <text x="1100" y="222" fill="#cbd5e1" font-size="8" text-anchor="middle">USER_INPUT 1001</text>
+      <text x="1100" y="238" fill="#cbd5e1" font-size="8" text-anchor="middle">CONFIG_MISSING 1011</text>
+      <text x="1100" y="254" fill="#fb7185" font-size="8" text-anchor="middle" font-weight="600">CONFIG_INVALID 1012</text>
+      <text x="1100" y="272" fill="#cbd5e1" font-size="8" text-anchor="middle">CS2xxx LLM → 3</text>
+      <text x="1100" y="288" fill="#cbd5e1" font-size="8" text-anchor="middle">CS3xxx target → 4</text>
+      <text x="1100" y="304" fill="#cbd5e1" font-size="8" text-anchor="middle">CS4xxx index → 5</text>
+      <text x="1100" y="320" fill="#cbd5e1" font-size="8" text-anchor="middle">CS5xxx internal → 6</text>
+      <text x="1100" y="340" fill="#fb7185" font-size="7" text-anchor="middle">INTERNAL 5001</text>
+
+      <!-- report_error -->
+      <rect x="1035" y="370" width="130" height="80" rx="6" fill="#0f172a"/>
+      <rect x="1035" y="370" width="130" height="80" rx="6" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="1100" y="392" fill="white" font-size="11" font-weight="600" text-anchor="middle">report_error</text>
+      <text x="1100" y="408" fill="#94a3b8" font-size="7" text-anchor="middle">stderr: code+msg+</text>
+      <text x="1100" y="421" fill="#94a3b8" font-size="7" text-anchor="middle">source+hint</text>
+      <text x="1100" y="442" fill="#64748b" font-size="6" text-anchor="middle">src/errors.rs:115</text>
+
+      <!-- exit code -->
+      <rect x="1035" y="470" width="130" height="60" rx="6" fill="#0f172a"/>
+      <rect x="1035" y="470" width="130" height="60" rx="6" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="1100" y="492" fill="white" font-size="11" font-weight="600" text-anchor="middle">exit code</text>
+      <text x="1100" y="508" fill="#94a3b8" font-size="8" text-anchor="middle">std::process::exit</text>
+      <text x="1100" y="521" fill="#64748b" font-size="6" text-anchor="middle">src/main.rs:8-12</text>
+
+      <!-- resolve_api_key note -->
+      <rect x="1035" y="550" width="130" height="80" rx="6" fill="#0f172a"/>
+      <rect x="1035" y="550" width="130" height="80" rx="6" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="3,2"/>
+      <text x="1100" y="572" fill="white" font-size="10" font-weight="600" text-anchor="middle">resolve_api_key</text>
+      <text x="1100" y="588" fill="#94a3b8" font-size="7" text-anchor="middle">None / "   " →</text>
+      <text x="1100" y="600" fill="#94a3b8" font-size="7" text-anchor="middle">CONFIG_MISSING</text>
+      <text x="1100" y="613" fill="#fb7185" font-size="6" text-anchor="middle">(≠ config get llm.api_key)</text>
+      <text x="1100" y="626" fill="#64748b" font-size="6" text-anchor="middle">:528-538</text>
+
+      <!-- ===== Files region ===== -->
+
+      <!-- 22. ~/.codesleuth/config.toml -->
+      <rect x="40" y="720" width="270" height="80" rx="6" fill="#0f172a"/>
+      <rect x="40" y="720" width="270" height="80" rx="6" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="175" y="743" fill="white" font-size="11" font-weight="600" text-anchor="middle">~/.codesleuth/config.toml</text>
+      <text x="175" y="761" fill="#94a3b8" font-size="8" text-anchor="middle">global · FileConfig</text>
+      <text x="175" y="776" fill="#94a3b8" font-size="7" text-anchor="middle">fixed path · persisted by config_set</text>
+      <text x="175" y="791" fill="#64748b" font-size="6" text-anchor="middle">src/config.rs:159-162</text>
+
+      <!-- 23. .codesleuth/config.toml -->
+      <rect x="340" y="720" width="240" height="80" rx="6" fill="#0f172a"/>
+      <rect x="340" y="720" width="240" height="80" rx="6" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="460" y="743" fill="white" font-size="11" font-weight="600" text-anchor="middle">.codesleuth/config.toml</text>
+      <text x="460" y="761" fill="#94a3b8" font-size="8" text-anchor="middle">project · FileConfig</text>
+      <text x="460" y="776" fill="#94a3b8" font-size="7" text-anchor="middle">preferred project path</text>
+      <text x="460" y="791" fill="#64748b" font-size="6" text-anchor="middle">src/config.rs:169-204</text>
+
+      <!-- 24. codesleuth.toml -->
+      <rect x="610" y="720" width="200" height="80" rx="6" fill="#0f172a"/>
+      <rect x="610" y="720" width="200" height="80" rx="6" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="710" y="743" fill="white" font-size="11" font-weight="600" text-anchor="middle">codesleuth.toml</text>
+      <text x="710" y="761" fill="#94a3b8" font-size="8" text-anchor="middle">project fallback</text>
+      <text x="710" y="776" fill="#94a3b8" font-size="7" text-anchor="middle">when .codesleuth absent</text>
+      <text x="710" y="791" fill="#64748b" font-size="6" text-anchor="middle">src/config.rs:169-204</text>
+
+      <!-- 25. Config::default (built-in) -->
+      <rect x="840" y="720" width="170" height="80" rx="6" fill="#0f172a"/>
+      <rect x="840" y="720" width="170" height="80" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="925" y="740" fill="white" font-size="11" font-weight="600" text-anchor="middle">Config::default</text>
+      <text x="925" y="757" fill="#94a3b8" font-size="7" text-anchor="middle">base_url · model</text>
+      <text x="925" y="770" fill="#94a3b8" font-size="7" text-anchor="middle">ctx 1M / 60%</text>
+      <text x="925" y="783" fill="#94a3b8" font-size="7" text-anchor="middle">Qwen3 1024d · thinking on</text>
+      <text x="925" y="795" fill="#64748b" font-size="6" text-anchor="middle">:121-148</text>
+
+      <!-- 26. stdout / stderr -->
+      <rect x="1040" y="720" width="120" height="80" rx="6" fill="#0f172a"/>
+      <rect x="1040" y="720" width="120" height="80" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="1100" y="743" fill="white" font-size="11" font-weight="600" text-anchor="middle">stdout / stderr</text>
+      <text x="1100" y="762" fill="#94a3b8" font-size="7" text-anchor="middle">paths · values</text>
+      <text x="1100" y="776" fill="#94a3b8" font-size="7" text-anchor="middle">+ error report</text>
+      <text x="1100" y="791" fill="#64748b" font-size="6" text-anchor="middle">run_config / report_error</text>
+
+      <!-- ============== LEGEND (outside all boundaries) ============== -->
+      <g transform="translate(20, 850)">
+        <text x="0" y="0" fill="#94a3b8" font-size="9" font-weight="600">legend</text>
+
+        <rect x="60" y="-10" width="14" height="10" rx="2" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1"/>
+        <text x="80" y="0" fill="#cbd5e1" font-size="8">CLI dispatch (clap)</text>
+
+        <rect x="220" y="-10" width="14" height="10" rx="2" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1"/>
+        <text x="240" y="0" fill="#cbd5e1" font-size="8">config engine</text>
+
+        <rect x="350" y="-10" width="14" height="10" rx="2" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1"/>
+        <text x="370" y="0" fill="#cbd5e1" font-size="8">TOML file</text>
+
+        <rect x="460" y="-10" width="14" height="10" rx="2" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1"/>
+        <text x="480" y="0" fill="#cbd5e1" font-size="8">error / exit</text>
+
+        <rect x="570" y="-10" width="14" height="10" rx="2" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1"/>
+        <text x="590" y="0" fill="#cbd5e1" font-size="8">entry / I/O</text>
+
+        <rect x="680" y="-10" width="14" height="10" rx="2" fill="none" stroke="#fbbf24" stroke-width="1" stroke-dasharray="2,1"/>
+        <text x="700" y="0" fill="#cbd5e1" font-size="8">file / module region</text>
+
+        <line x1="840" y1="-5" x2="868" y2="-5" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrowhead-rose)"/>
+        <text x="878" y="0" fill="#cbd5e1" font-size="8">error path</text>
+
+        <line x1="960" y1="-5" x2="988" y2="-5" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <text x="998" y="0" fill="#cbd5e1" font-size="8">call / data flow</text>
+
+        <line x1="1090" y1="-5" x2="1118" y2="-5" stroke="#a78bfa" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrowhead)"/>
+        <text x="1128" y="0" fill="#cbd5e1" font-size="8">file I/O</text>
+      </g>
+    </svg>
+  </div>
+
+  <!-- Summary cards -->
+  <div class="summary">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-dot" style="background:#22d3ee"></div>
+        <h3>CLI dispatch</h3>
+      </div>
+      <ul>
+        <li><strong>入口</strong> · main → Cli::parse → Cli::run</li>
+        <li><strong>config 子命令</strong> · Command::Config { action }</li>
+        <li><strong>三动作</strong> · Get { key } / Set { key, value } / Path</li>
+        <li><strong>run_config</strong> · 派发至 config_get / config_set / 打印路径</li>
+        <li><strong>profile</strong> · 仅透传至 config_get，base_url/model 不透传</li>
+        <li><strong>src/cli.rs</strong> · 14-58, 60-77, 80-96, 99-130, 480-511</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="card-dot" style="background:#34d399"></div>
+        <h3>config engine</h3>
+      </div>
+      <ul>
+        <li><strong>config::load</strong> · 分层合并入口</li>
+        <li><strong>load_layered</strong> · default ← [global, project] ← profile ← CLI</li>
+        <li><strong>apply_profile (D017)</strong> · 先于 merge_cli；未知档位 → CONFIG_INVALID</li>
+        <li><strong>merge_file / merge_cli</strong> · 字段级 Option 覆盖</li>
+        <li><strong>config_key_table</strong> · 13 写键 + 1 只读 (llm.profile)</li>
+        <li><strong>apply_set / resolved_get / keys_hint</strong> · 共用键表；未知键 → CS1012</li>
+        <li><strong>to_file_view</strong> · Config → FileConfig 投影，供全量打印</li>
+        <li><strong>src/config.rs</strong> · 121-148, 159-204, 206-310, 312-524</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="card-dot" style="background:#a78bfa"></div>
+        <h3>files &amp; errors</h3>
+      </div>
+      <ul>
+        <li><strong>global</strong> · ~/.codesleuth/config.toml（持久化目标）</li>
+        <li><strong>project</strong> · .codesleuth/config.toml → codesleuth.toml 回退</li>
+        <li><strong>Config::default</strong> · 缺失文件时回退内置默认</li>
+        <li><strong>CS1012</strong> · 未知键 / 未知档位 / 无效 TOML</li>
+        <li><strong>CS1011</strong> · 缺凭据 (resolve_api_key 严格判空)</li>
+        <li><strong>CS1xxx→1, CS101x→2, CS2xxx→3, … CS5xxx→6</strong></li>
+        <li><strong>report_error</strong> · stderr: code+msg+source+hint</li>
+        <li><strong>测试</strong> · precedence / project &gt; global / profile / invalid_toml · src/config.rs:622-791</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="footer">codesleuth · config subcommand · 2026-10-07 · viewBox 1200×900</div>
+</div>
+</body>
+</html>

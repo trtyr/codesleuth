@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>EvidenceStore · 证据库架构图</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'JetBrains Mono', monospace;
+    background: #020617;
+    color: #e2e8f0;
+    padding: 24px;
+    min-height: 100vh;
+  }
+  .container { max-width: 1180px; margin: 0 auto; }
+  .header {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 16px; padding: 0 4px;
+  }
+  .pulse-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #fb7185;
+    box-shadow: 0 0 0 0 rgba(251, 113, 133, 0.6);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(251, 113, 133, 0.6); }
+    70% { box-shadow: 0 0 0 10px rgba(251, 113, 133, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(251, 113, 133, 0); }
+  }
+  .header h1 { font-size: 18px; font-weight: 600; color: #f1f5f9; }
+  .header .subtitle { font-size: 11px; color: #94a3b8; margin-left: auto; }
+  .diagram-card {
+    background: #0f172a; border: 1px solid #1e293b;
+    border-radius: 12px; padding: 20px;
+  }
+  .footer { margin-top: 16px; text-align: center; font-size: 10px; color: #64748b; }
+</style>
+</head>
+<body>
+<div class="container" id="report-container">
+  <div class="header">
+    <div class="pulse-dot"></div>
+    <h1>EvidenceStore · 证据库架构图</h1>
+    <div class="subtitle">src/evidence.rs · src/harness.rs · src/report.rs</div>
+  </div>
+  <div class="diagram-card">
+    <svg viewBox="0 0 1100 720" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;display:block;">
+      <rect width="1100" height="720" fill="#020617"/>
+      <defs>
+        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+          <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+        </pattern>
+        <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
+        </marker>
+        <marker id="arrowhead-emerald" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#34d399"/>
+        </marker>
+        <marker id="arrowhead-cyan" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#22d3ee"/>
+        </marker>
+        <marker id="arrowhead-rose" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#fb7185"/>
+        </marker>
+      </defs>
+      <rect width="1100" height="720" fill="url(#grid)"/>
+
+      <!-- ARROWS (drawn first, behind components) -->
+      <line x1="180" y1="120" x2="180" y2="196" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+      <text x="192" y="160" fill="#94a3b8" font-size="8">read path verbatim</text>
+
+      <line x1="180" y1="250" x2="220" y2="286" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrowhead-emerald)"/>
+      <text x="155" y="274" fill="#34d399" font-size="8">write</text>
+
+      <line x1="400" y1="250" x2="420" y2="286" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrowhead-emerald)"/>
+      <text x="432" y="274" fill="#34d399" font-size="8">write</text>
+
+      <line x1="518" y1="225" x2="502" y2="225" stroke="#fb7185" stroke-width="1" stroke-dasharray="3,3" marker-end="url(#arrowhead-rose)"/>
+      <text x="510" y="218" fill="#fb7185" font-size="7" text-anchor="middle">filter</text>
+
+      <line x1="562" y1="315" x2="596" y2="315" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowhead-cyan)"/>
+      <text x="579" y="308" fill="#22d3ee" font-size="7" text-anchor="middle">keys</text>
+
+      <line x1="562" y1="360" x2="596" y2="385" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowhead-cyan)"/>
+      <text x="555" y="380" fill="#22d3ee" font-size="7">seq</text>
+
+      <line x1="742" y1="385" x2="796" y2="345" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#arrowhead-rose)"/>
+      <text x="770" y="356" fill="#fb7185" font-size="8" text-anchor="middle">anchor</text>
+
+      <path d="M 250 480 Q 180 360 180 252" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)"/>
+      <text x="118" y="370" fill="#94a3b8" font-size="8" text-anchor="middle">call</text>
+
+      <path d="M 380 480 Q 400 360 400 252" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)"/>
+      <text x="410" y="370" fill="#94a3b8" font-size="8">call</text>
+
+      <line x1="542" y1="520" x2="576" y2="520" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrowhead-emerald)"/>
+      <text x="559" y="512" fill="#34d399" font-size="8" text-anchor="middle">validate</text>
+
+      <path d="M 660 480 Q 670 440 670 412" stroke="#34d399" stroke-width="1.5" fill="none" marker-end="url(#arrowhead-emerald)"/>
+      <text x="680" y="445" fill="#34d399" font-size="8">cite_seq</text>
+
+      <path d="M 802 510 Q 860 460 920 402" stroke="#94a3b8" stroke-width="1.5" fill="none" stroke-dasharray="4,4" marker-end="url(#arrowhead)"/>
+      <text x="855" y="460" fill="#94a3b8" font-size="8">set audit_seq / None</text>
+
+      <!-- SECURITY GROUP BOUNDARY (EvidenceStore module) -->
+      <rect x="30" y="180" width="740" height="260" rx="12" fill="none" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,4" opacity="0.7"/>
+      <text x="50" y="198" fill="#fb7185" font-size="9" font-weight="600">EvidenceStore module · src/evidence.rs:26-55</text>
+
+      <!-- COMPONENT BOXES -->
+
+      <!-- Read Tool (External) -->
+      <rect x="80" y="60" width="200" height="60" rx="6" fill="#0f172a"/>
+      <rect x="80" y="60" width="200" height="60" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="180" y="84" fill="white" font-size="12" font-weight="600" text-anchor="middle">read tool</text>
+      <text x="180" y="102" fill="#94a3b8" font-size="9" text-anchor="middle">read 工具 · 文件读取源</text>
+
+      <!-- observe_exact -->
+      <rect x="80" y="200" width="200" height="50" rx="6" fill="#0f172a"/>
+      <rect x="80" y="200" width="200" height="50" rx="6" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="180" y="222" fill="white" font-size="12" font-weight="600" text-anchor="middle">observe_exact</text>
+      <text x="180" y="238" fill="#94a3b8" font-size="8" text-anchor="middle">src/evidence.rs:33-37 · 逐字入库</text>
+
+      <!-- observe -->
+      <rect x="300" y="200" width="200" height="50" rx="6" fill="#0f172a"/>
+      <rect x="300" y="200" width="200" height="50" rx="6" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="400" y="222" fill="white" font-size="12" font-weight="600" text-anchor="middle">observe</text>
+      <text x="400" y="238" fill="#94a3b8" font-size="8" text-anchor="middle">src/evidence.rs:44-51 · 切词+path_like</text>
+
+      <!-- path_like filter -->
+      <rect x="520" y="200" width="200" height="50" rx="6" fill="#0f172a"/>
+      <rect x="520" y="200" width="200" height="50" rx="6" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="620" y="222" fill="white" font-size="11" font-weight="600" text-anchor="middle">path_like filter</text>
+      <text x="620" y="238" fill="#94a3b8" font-size="8" text-anchor="middle">推断 · 路径形 token 判定</text>
+
+      <!-- EvidenceStore (Database) -->
+      <rect x="160" y="290" width="400" height="110" rx="6" fill="#0f172a"/>
+      <rect x="160" y="290" width="400" height="110" rx="6" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="360" y="318" fill="white" font-size="13" font-weight="600" text-anchor="middle">EvidenceStore</text>
+      <text x="360" y="338" fill="#94a3b8" font-size="9" text-anchor="middle">src/evidence.rs:26-30</text>
+      <text x="360" y="358" fill="#cbd5e1" font-size="9" text-anchor="middle">Mutex&lt;HashMap&lt;String, usize&gt;&gt;</text>
+      <text x="360" y="376" fill="#94a3b8" font-size="8" text-anchor="middle">path → first audit seq · session-scoped</text>
+      <text x="360" y="392" fill="#94a3b8" font-size="8" text-anchor="middle">submit_report 校验 + 报告↔审计互查锚点</text>
+
+      <!-- observed_paths -->
+      <rect x="600" y="290" width="140" height="50" rx="6" fill="#0f172a"/>
+      <rect x="600" y="290" width="140" height="50" rx="6" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="670" y="312" fill="white" font-size="11" font-weight="600" text-anchor="middle">observed_paths</text>
+      <text x="670" y="328" fill="#94a3b8" font-size="8" text-anchor="middle">:39-42 · 只读 keys</text>
+
+      <!-- cite_seq -->
+      <rect x="600" y="360" width="140" height="50" rx="6" fill="#0f172a"/>
+      <rect x="600" y="360" width="140" height="50" rx="6" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="670" y="382" fill="white" font-size="11" font-weight="600" text-anchor="middle">cite_seq</text>
+      <text x="670" y="398" fill="#94a3b8" font-size="8" text-anchor="middle">:53-55 · 锚点查询</text>
+
+      <!-- Evidence.audit_seq (Backend / report side) -->
+      <rect x="800" y="290" width="240" height="110" rx="6" fill="#0f172a"/>
+      <rect x="800" y="290" width="240" height="110" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="920" y="318" fill="white" font-size="13" font-weight="600" text-anchor="middle">Evidence.audit_seq</text>
+      <text x="920" y="338" fill="#94a3b8" font-size="9" text-anchor="middle">src/report.rs:9-16</text>
+      <text x="920" y="358" fill="#cbd5e1" font-size="9" text-anchor="middle">报告侧消费字段</text>
+      <text x="920" y="376" fill="#94a3b8" font-size="8" text-anchor="middle">degraded 时 = None</text>
+      <text x="920" y="392" fill="#94a3b8" font-size="8" text-anchor="middle">报告 ↔ 审计互查锚点</text>
+
+      <!-- Harness (Backend) -->
+      <rect x="160" y="480" width="380" height="80" rx="6" fill="#0f172a"/>
+      <rect x="160" y="480" width="380" height="80" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="350" y="510" fill="white" font-size="13" font-weight="600" text-anchor="middle">Harness</text>
+      <text x="350" y="530" fill="#94a3b8" font-size="9" text-anchor="middle">src/harness.rs:35-44, 59</text>
+      <text x="350" y="548" fill="#cbd5e1" font-size="9" text-anchor="middle">evidence: Arc&lt;Mutex&lt;EvidenceStore&gt;&gt; · new() → default()</text>
+
+      <!-- submit_report (Backend) -->
+      <rect x="580" y="480" width="220" height="80" rx="6" fill="#0f172a"/>
+      <rect x="580" y="480" width="220" height="80" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="690" y="510" fill="white" font-size="13" font-weight="600" text-anchor="middle">submit_report</text>
+      <text x="690" y="530" fill="#94a3b8" font-size="9" text-anchor="middle">src/harness.rs:948-980</text>
+      <text x="690" y="548" fill="#cbd5e1" font-size="9" text-anchor="middle">消费 cite_seq · 校验落点</text>
+
+      <!-- Tests (External) -->
+      <rect x="40" y="590" width="240" height="50" rx="6" fill="#0f172a"/>
+      <rect x="40" y="590" width="240" height="50" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="160" y="610" fill="white" font-size="10" font-weight="600" text-anchor="middle">evidence_store_observes_citations</text>
+      <text x="160" y="626" fill="#94a3b8" font-size="8" text-anchor="middle">src/harness.rs:1122-1127 · 闭环</text>
+
+      <rect x="300" y="590" width="280" height="50" rx="6" fill="#0f172a"/>
+      <rect x="300" y="590" width="280" height="50" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="440" y="610" fill="white" font-size="10" font-weight="600" text-anchor="middle">evidence_exact_paths_with_spaces_and_cjk</text>
+      <text x="440" y="626" fill="#94a3b8" font-size="8" text-anchor="middle">src/harness.rs:1129-1148 · FINDING-010</text>
+
+      <rect x="600" y="590" width="280" height="50" rx="6" fill="#0f172a"/>
+      <rect x="600" y="590" width="280" height="50" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="740" y="610" fill="white" font-size="10" font-weight="600" text-anchor="middle">submit_report_converges_with_validated_evidence</text>
+      <text x="740" y="626" fill="#94a3b8" font-size="8" text-anchor="middle">src/harness.rs:948-980</text>
+
+      <!-- LEGEND (outside security group boundary) -->
+      <text x="50" y="680" fill="#94a3b8" font-size="9" font-weight="600">LEGEND</text>
+
+      <rect x="115" y="668" width="14" height="14" rx="3" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="135" y="680" fill="#cbd5e1" font-size="9">Security · EvidenceStore methods</text>
+
+      <rect x="380" y="668" width="14" height="14" rx="3" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="400" y="680" fill="#cbd5e1" font-size="9">Database · HashMap storage</text>
+
+      <rect x="615" y="668" width="14" height="14" rx="3" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="635" y="680" fill="#cbd5e1" font-size="9">Backend · Harness / report</text>
+
+      <rect x="845" y="668" width="14" height="14" rx="3" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="865" y="680" fill="#cbd5e1" font-size="9">External · read tool / tests</text>
+    </svg>
+  </div>
+  <div class="footer">
+    codesleuth deep-dive · 2026-10-07 · evidence module architecture · viewBox 1100×720
+  </div>
+</div>
+</body>
+</html>

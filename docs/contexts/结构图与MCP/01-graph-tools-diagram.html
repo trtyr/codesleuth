@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>结构图工具集 · 组件/调用关系架构图</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'JetBrains Mono', monospace; background: #020617; color: #e2e8f0; padding: 24px; }
+.container { max-width: 1240px; margin: 0 auto; }
+.header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: #34d399; box-shadow: 0 0 0 0 rgba(52,211,153,0.7); animation: pulse 2s infinite; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(52,211,153,0.7); } 70% { box-shadow: 0 0 0 8px rgba(52,211,153,0); } 100% { box-shadow: 0 0 0 0 rgba(52,211,153,0); } }
+h1 { font-size: 18px; font-weight: 600; color: #f1f5f9; }
+.subtitle { font-size: 11px; color: #94a3b8; margin-top: 2px; }
+.diagram-card { background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; padding: 20px; }
+.cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 16px; }
+.card { background: #0f172a; border: 1px solid #1e293b; border-radius: 8px; padding: 14px; }
+.card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.card-dot { width: 8px; height: 8px; border-radius: 50%; }
+.card h3 { font-size: 12px; color: #f1f5f9; font-weight: 600; }
+.card ul { list-style: none; font-size: 10px; color: #94a3b8; line-height: 1.6; }
+.footer { margin-top: 16px; font-size: 9px; color: #64748b; text-align: center; }
+</style>
+</head>
+<body>
+<div class="container" id="report-container">
+  <div class="header">
+    <div class="dot"></div>
+    <div>
+      <h1>结构图工具集 · 组件/调用关系架构图</h1>
+      <div class="subtitle">codesleuth · src/tools/graph.rs + src/mcp.rs + src/cli.rs + src/bootlock.rs · 5 MCP tools over stdio</div>
+    </div>
+  </div>
+  <div class="diagram-card">
+    <svg viewBox="0 0 1200 820" xmlns="http://www.w3.org/2000/svg" style="width:100%; height:auto; display:block;">
+      <defs>
+        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+          <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+        </pattern>
+        <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
+        </marker>
+        <marker id="arrowhead-rose" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#fb7185"/>
+        </marker>
+        <marker id="arrowhead-orange" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#fb923c"/>
+        </marker>
+      </defs>
+      <rect width="1200" height="820" fill="url(#grid)"/>
+
+      <!-- Region boundaries -->
+      <rect x="30" y="65" width="1140" height="540" rx="12" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="8,4" opacity="0.55"/>
+      <text x="50" y="83" fill="#fbbf24" font-size="10" font-weight="600">codesleuth runtime · per session</text>
+
+      <rect x="30" y="625" width="1140" height="120" rx="12" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="8,4" opacity="0.55"/>
+      <text x="50" y="643" fill="#fbbf24" font-size="10" font-weight="600">external codegraph process · stdio subprocess · killed on Drop</text>
+
+      <!-- Arrows (drawn before boxes for z-order masking) -->
+
+      <!-- Harness → ToolRegistry -->
+      <line x1="600" y1="155" x2="600" y2="183" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+      <text x="610" y="173" fill="#94a3b8" font-size="8">tool name lookup</text>
+
+      <!-- ToolRegistry → 5 tools (fan-out) -->
+      <line x1="540" y1="245" x2="280" y2="283" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+      <line x1="560" y1="245" x2="430" y2="283" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+      <line x1="600" y1="245" x2="600" y2="283" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+      <line x1="640" y1="245" x2="770" y2="283" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+      <line x1="660" y1="245" x2="920" y2="283" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+      <text x="668" y="268" fill="#94a3b8" font-size="8">register</text>
+
+      <!-- 5 tools → CodegraphEngine (fan-in) -->
+      <line x1="280" y1="367" x2="540" y2="403" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+      <line x1="430" y1="367" x2="560" y2="403" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+      <line x1="600" y1="367" x2="600" y2="403" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+      <line x1="770" y1="367" x2="640" y2="403" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+      <line x1="920" y1="367" x2="660" y2="403" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+      <text x="668" y="390" fill="#94a3b8" font-size="8">execute → engine.call</text>
+
+      <!-- CodegraphEngine → McpClient -->
+      <line x1="600" y1="467" x2="600" y2="503" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+      <text x="610" y="488" fill="#94a3b8" font-size="8">call_tool (name+codegraph_, projectPath)</text>
+
+      <!-- McpClient → codegraph CLI (stdio request) -->
+      <line x1="600" y1="567" x2="600" y2="658" stroke="#fb923c" stroke-width="2" marker-end="url(#arrowhead-orange)"/>
+      <text x="610" y="595" fill="#fb923c" font-size="8">stdio newline JSON-RPC</text>
+      <text x="610" y="608" fill="#fb923c" font-size="8">tools/call · 90s timeout</text>
+      <text x="610" y="621" fill="#fb923c" font-size="8">AtomicU64 request id</text>
+
+      <!-- McpClient ← codegraph CLI (response, dashed orange) -->
+      <line x1="680" y1="658" x2="680" y2="567" stroke="#fb923c" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrowhead-orange)"/>
+      <text x="690" y="600" fill="#fb923c" font-size="8">response · result.content[*].text</text>
+      <text x="690" y="613" fill="#fb923c" font-size="8">→ [codegraph &lt;tool&gt;] &lt;label&gt;</text>
+
+      <!-- CodegraphEngine ↔ bootlock -->
+      <path d="M 450 420 L 202 420" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#arrowhead-rose)"/>
+      <text x="260" y="413" fill="#fb7185" font-size="8">acquire · flock(boot.lock) 300s</text>
+      <path d="M 202 450 L 450 450" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#arrowhead-rose)"/>
+      <text x="260" y="465" fill="#fb7185" font-size="8">INDEX_LOCKED CS4016 if Lost</text>
+
+      <!-- CodegraphEngine → config -->
+      <line x1="750" y1="435" x2="818" y2="435" stroke="#94a3b8" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+      <text x="755" y="428" fill="#94a3b8" font-size="7">graph.bin (default "codegraph")</text>
+
+      <!-- CLI Assembly → ToolRegistry -->
+      <path d="M 820 205 L 752 205" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+      <text x="755" y="198" fill="#94a3b8" font-size="8">register 5 if non-empty</text>
+      <path d="M 820 230 L 752 230" stroke="#64748b" stroke-width="1.2" stroke-dasharray="3,3" marker-end="url(#arrowhead)"/>
+      <text x="755" y="243" fill="#94a3b8" font-size="7">else → terrain hint · first_suffix</text>
+
+      <!-- ===== Components (opaque mask + styled fill) ===== -->
+
+      <!-- Harness / Agent Loop -->
+      <rect x="450" y="95" width="300" height="60" rx="6" fill="#0f172a"/>
+      <rect x="450" y="95" width="300" height="60" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="600" y="115" fill="white" font-size="12" font-weight="600" text-anchor="middle">Harness / Agent Loop</text>
+      <text x="600" y="131" fill="#94a3b8" font-size="9" text-anchor="middle">src/harness.rs · LLM tool-call dispatch</text>
+      <text x="600" y="145" fill="#64748b" font-size="8" text-anchor="middle">tool name → tool.execute</text>
+
+      <!-- ToolRegistry -->
+      <rect x="450" y="185" width="300" height="60" rx="6" fill="#0f172a"/>
+      <rect x="450" y="185" width="300" height="60" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="600" y="205" fill="white" font-size="12" font-weight="600" text-anchor="middle">ToolRegistry</text>
+      <text x="600" y="221" fill="#94a3b8" font-size="9" text-anchor="middle">src/tools/mod.rs:24-59</text>
+      <text x="600" y="235" fill="#64748b" font-size="8" text-anchor="middle">register · get · schemas · is_empty</text>
+
+      <!-- ExploreTool -->
+      <rect x="195" y="285" width="170" height="80" rx="6" fill="#0f172a"/>
+      <rect x="195" y="285" width="170" height="80" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="280" y="305" fill="white" font-size="11" font-weight="600" text-anchor="middle">ExploreTool</text>
+      <text x="280" y="321" fill="#94a3b8" font-size="8" text-anchor="middle">codegraph_explore</text>
+      <text x="280" y="336" fill="#64748b" font-size="7" text-anchor="middle">args.query (NL)</text>
+      <text x="280" y="350" fill="#64748b" font-size="7" text-anchor="middle">src/tools/graph.rs:185-227</text>
+
+      <!-- CallersTool -->
+      <rect x="380" y="285" width="170" height="80" rx="6" fill="#0f172a"/>
+      <rect x="380" y="285" width="170" height="80" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="465" y="305" fill="white" font-size="11" font-weight="600" text-anchor="middle">CallersTool</text>
+      <text x="465" y="321" fill="#94a3b8" font-size="8" text-anchor="middle">codegraph_callers</text>
+      <text x="465" y="336" fill="#64748b" font-size="7" text-anchor="middle">args.symbol + limit/depth</text>
+      <text x="465" y="350" fill="#64748b" font-size="7" text-anchor="middle">src/tools/graph.rs:130-183</text>
+
+      <!-- CalleesTool -->
+      <rect x="565" y="285" width="170" height="80" rx="6" fill="#0f172a"/>
+      <rect x="565" y="285" width="170" height="80" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="650" y="305" fill="white" font-size="11" font-weight="600" text-anchor="middle">CalleesTool</text>
+      <text x="650" y="321" fill="#94a3b8" font-size="8" text-anchor="middle">codegraph_callees</text>
+      <text x="650" y="336" fill="#64748b" font-size="7" text-anchor="middle">args.symbol + limit/depth</text>
+      <text x="650" y="350" fill="#64748b" font-size="7" text-anchor="middle">src/tools/graph.rs:130-183</text>
+
+      <!-- ImpactTool -->
+      <rect x="750" y="285" width="170" height="80" rx="6" fill="#0f172a"/>
+      <rect x="750" y="285" width="170" height="80" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="835" y="305" fill="white" font-size="11" font-weight="600" text-anchor="middle">ImpactTool</text>
+      <text x="835" y="321" fill="#94a3b8" font-size="8" text-anchor="middle">codegraph_impact</text>
+      <text x="835" y="336" fill="#64748b" font-size="7" text-anchor="middle">args.symbol + limit/depth</text>
+      <text x="835" y="350" fill="#64748b" font-size="7" text-anchor="middle">src/tools/graph.rs:130-183</text>
+
+      <!-- FilesTool -->
+      <rect x="935" y="285" width="170" height="80" rx="6" fill="#0f172a"/>
+      <rect x="935" y="285" width="170" height="80" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="1020" y="305" fill="white" font-size="11" font-weight="600" text-anchor="middle">FilesTool</text>
+      <text x="1020" y="321" fill="#94a3b8" font-size="8" text-anchor="middle">codegraph_files</text>
+      <text x="1020" y="336" fill="#64748b" font-size="7" text-anchor="middle">args.filter (glob, optional)</text>
+      <text x="1020" y="350" fill="#64748b" font-size="7" text-anchor="middle">src/tools/graph.rs:229-265</text>
+
+      <!-- CodegraphEngine -->
+      <rect x="450" y="405" width="300" height="60" rx="6" fill="#0f172a"/>
+      <rect x="450" y="405" width="300" height="60" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="600" y="425" fill="white" font-size="12" font-weight="600" text-anchor="middle">CodegraphEngine</text>
+      <text x="600" y="441" fill="#94a3b8" font-size="9" text-anchor="middle">src/tools/graph.rs:69-110</text>
+      <text x="600" y="455" fill="#64748b" font-size="8" text-anchor="middle">start_with_bin · call (projectPath, codegraph_ prefix)</text>
+
+      <!-- McpClient + stdio (Message Bus) -->
+      <rect x="450" y="505" width="300" height="60" rx="6" fill="#0f172a"/>
+      <rect x="450" y="505" width="300" height="60" rx="6" fill="rgba(251,146,60,0.3)" stroke="#fb923c" stroke-width="1.5"/>
+      <text x="600" y="525" fill="white" font-size="12" font-weight="600" text-anchor="middle">McpClient + stdio</text>
+      <text x="600" y="541" fill="#94a3b8" font-size="9" text-anchor="middle">src/mcp.rs:1-239 · newline JSON-RPC</text>
+      <text x="600" y="555" fill="#64748b" font-size="8" text-anchor="middle">spawn · initialize(2025-03-26) · call_tool · Drop</text>
+
+      <!-- CLI Assembly -->
+      <rect x="820" y="185" width="180" height="60" rx="6" fill="#0f172a"/>
+      <rect x="820" y="185" width="180" height="60" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="910" y="205" fill="white" font-size="12" font-weight="600" text-anchor="middle">CLI Assembly</text>
+      <text x="910" y="221" fill="#94a3b8" font-size="9" text-anchor="middle">src/cli.rs:255-301</text>
+      <text x="910" y="235" fill="#64748b" font-size="8" text-anchor="middle">start engine + register tools</text>
+
+      <!-- config -->
+      <rect x="820" y="405" width="180" height="60" rx="6" fill="#0f172a"/>
+      <rect x="820" y="405" width="180" height="60" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="910" y="425" fill="white" font-size="12" font-weight="600" text-anchor="middle">config::graph.bin</text>
+      <text x="910" y="441" fill="#94a3b8" font-size="9" text-anchor="middle">src/config.rs:24-29, 142-144</text>
+      <text x="910" y="455" fill="#64748b" font-size="8" text-anchor="middle">default "codegraph"</text>
+
+      <!-- bootlock (Security group, dashed rose) -->
+      <rect x="40" y="405" width="160" height="60" rx="6" fill="#0f172a"/>
+      <rect x="40" y="405" width="160" height="60" rx="6" fill="rgba(136,19,55,0.2)" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,4"/>
+      <text x="120" y="425" fill="white" font-size="12" font-weight="600" text-anchor="middle">bootlock</text>
+      <text x="120" y="441" fill="#94a3b8" font-size="9" text-anchor="middle">src/bootlock.rs:1-204</text>
+      <text x="120" y="455" fill="#64748b" font-size="8" text-anchor="middle">flock(.codesleuth/boot.lock)</text>
+
+      <!-- codegraph CLI subprocess -->
+      <rect x="450" y="660" width="300" height="60" rx="6" fill="#0f172a"/>
+      <rect x="450" y="660" width="300" height="60" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="600" y="680" fill="white" font-size="12" font-weight="600" text-anchor="middle">codegraph serve --mcp</text>
+      <text x="600" y="695" fill="#94a3b8" font-size="9" text-anchor="middle">stdio subprocess · 5 tools in-process</text>
+      <text x="600" y="710" fill="#fb7185" font-size="8" text-anchor="middle">Drop → start_kill (src/mcp.rs:198-204)</text>
+
+      <!-- Legend (placed below region boundaries) -->
+      <text x="50" y="775" fill="#94a3b8" font-size="10" font-weight="600">Legend</text>
+      <rect x="105" y="766" width="10" height="10" fill="rgba(8,51,68,0.4)" stroke="#22d3ee"/>
+      <text x="120" y="775" fill="#94a3b8" font-size="9">Frontend</text>
+      <rect x="190" y="766" width="10" height="10" fill="rgba(6,78,59,0.4)" stroke="#34d399"/>
+      <text x="205" y="775" fill="#94a3b8" font-size="9">Backend</text>
+      <rect x="275" y="766" width="10" height="10" fill="rgba(251,146,60,0.3)" stroke="#fb923c"/>
+      <text x="290" y="775" fill="#94a3b8" font-size="9">MCP stdio bus</text>
+      <rect x="400" y="766" width="10" height="10" fill="rgba(30,41,59,0.5)" stroke="#94a3b8"/>
+      <text x="415" y="775" fill="#94a3b8" font-size="9">External / config</text>
+      <rect x="525" y="766" width="10" height="10" fill="rgba(136,19,55,0.2)" stroke="#fb7185" stroke-dasharray="2,2"/>
+      <text x="540" y="775" fill="#94a3b8" font-size="9">Lock / Drop-kill</text>
+      <text x="50" y="800" fill="#64748b" font-size="8">solid: data/control flow · dashed rose: flock/Drop · orange: stdio JSON-RPC (newline-delimited, 90s timeout, AtomicU64 id)</text>
+    </svg>
+  </div>
+  <div class="cards">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-dot" style="background:#34d399;"></div>
+        <h3>入口与 5 工具</h3>
+      </div>
+      <ul>
+        <li>• CodegraphEngine::start_with_bin (graph.rs:75-102)</li>
+        <li>• 5 tools: explore / callers / callees / impact / files</li>
+        <li>• macro cg_symbol_tool! 生成 3 个 symbol 工具</li>
+        <li>• graph_symbols_nonempty 才注册 (cli.rs:255-301)</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-dot" style="background:#fb923c;"></div>
+        <h3>MCP stdio 通道</h3>
+      </div>
+      <ul>
+        <li>• spawn "codegraph serve --mcp" 子进程</li>
+        <li>• newline JSON-RPC over stdio (src/mcp.rs)</li>
+        <li>• 90s timeout · AtomicU64 request id</li>
+        <li>• protocolVersion 2025-03-26</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-dot" style="background:#fb7185;"></div>
+        <h3>生命周期与降级</h3>
+      </div>
+      <ul>
+        <li>• bootlock flock 300s · CS4016 INDEX_LOCKED</li>
+        <li>• Arc + Drop 独占 server (cli.rs:373)</li>
+        <li>• 索引空 → terrain hint (find_files/grep/read)</li>
+        <li>• 其它失败 → audit "degraded" 置 None</li>
+      </ul>
+    </div>
+  </div>
+  <div class="footer">codesleuth · 2026-10-07 · architecture-diagram v1.1 · tests/graph_live.rs:1-49 #[ignore]] 真机验收</div>
+</div>
+</body>
+</html>
