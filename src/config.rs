@@ -56,6 +56,18 @@ pub struct FileLlm {
     /// 明文直配（2026-10-05 归位：API Key 就住在配置文件里）。
     pub api_key: Option<String>,
     pub model: Option<String>,
+    /// 多模型档位（D017）：[llm.profiles.<名字>]，CLI --profile 选用；缺席字段跟随主 [llm]。
+    #[serde(default)]
+    pub profiles: std::collections::BTreeMap<String, FileProfile>,
+}
+
+/// 模型档位（D017）：连接面全套可选覆盖，缺席字段跟随主 [llm]。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct FileProfile {
+    pub base_url: Option<String>,
+    pub api_key: Option<String>,
+    pub model: Option<String>,
+    pub model_context_tokens: Option<u64>,
 }
 
 /// 运行时生效配置。
@@ -67,6 +79,8 @@ pub struct Config {
     /// 结图层（P005 R7.2）。
     pub graph: GraphConfig,
     pub thinking_disabled: bool,
+    /// 生效模型档位（D017）：None = 未用 --profile，走主 [llm]。
+    pub active_profile: Option<String>,
 }
 
 /// 结图层参数（P005 R7.2）。
@@ -128,6 +142,7 @@ impl Default for Config {
             graph: GraphConfig {
                 bin: "codegraph".into(),
             },
+            active_profile: None,
         }
     }
 }
@@ -137,6 +152,8 @@ impl Default for Config {
 pub struct CliOverrides {
     pub base_url: Option<String>,
     pub model: Option<String>,
+    /// 模型档位名（D017）：解析 [llm.profiles.<名字>]，旗标仍可再压。
+    pub profile: Option<String>,
 }
 
 /// 全局配置（用户拍板 2026-10-05）：~/.codesleuth/config.toml——一切全局东西的家。
@@ -193,11 +210,52 @@ pub fn load_layered(
     cli: CliOverrides,
 ) -> CsResult<Config> {
     let mut cfg = Config::default();
+    let mut profiles: std::collections::BTreeMap<String, FileProfile> = Default::default();
     for path in [global, project].into_iter().flatten() {
-        merge_file(&mut cfg, parse_file(path)?);
+        let fc = parse_file(path)?;
+        // D017：档位表逐层收集，项目层同名覆盖全局；连接面本身照旧 merge
+        profiles.extend(fc.llm.profiles.clone());
+        merge_file(&mut cfg, fc);
     }
+    apply_profile(&mut cfg, &profiles, cli.profile.as_deref())?;
     merge_cli(&mut cfg, cli);
     Ok(cfg)
+}
+
+/// D017 档位解析：存在性校验（未知名报错并列出可用档位）→ 逐字段覆盖（缺席跟随上层）。
+/// 先于 merge_cli 执行——--model / --base-url 旗标永远是最后覆写者。
+fn apply_profile(
+    cfg: &mut Config,
+    profiles: &std::collections::BTreeMap<String, FileProfile>,
+    name: Option<&str>,
+) -> CsResult<()> {
+    let Some(name) = name else {
+        return Ok(());
+    };
+    let prof = profiles.get(name).ok_or_else(|| {
+        let names = if profiles.is_empty() {
+            "（配置文件未定义任何档位）".to_string()
+        } else {
+            profiles.keys().cloned().collect::<Vec<_>>().join(", ")
+        };
+        CsError::new(CONFIG_INVALID, format!("未知模型档位: --profile {name}")).with_hint(format!(
+            "可用档位: {names}（经 [llm.profiles.<名字>] 定义于配置文件）"
+        ))
+    })?;
+    if let Some(v) = &prof.base_url {
+        cfg.llm.base_url = v.clone();
+    }
+    if let Some(v) = &prof.api_key {
+        cfg.llm.api_key = Some(v.clone());
+    }
+    if let Some(v) = &prof.model {
+        cfg.llm.model = v.clone();
+    }
+    if let Some(v) = prof.model_context_tokens {
+        cfg.context.model_context_tokens = v;
+    }
+    cfg.active_profile = Some(name.to_string());
+    Ok(())
 }
 
 fn merge_file(cfg: &mut Config, fc: FileConfig) {
@@ -294,6 +352,17 @@ pub fn config_key_table() -> &'static [ConfigKey] {
             set: |fc, v| {
                 fc.llm.model = Some(v);
                 Ok(())
+            },
+        },
+        ConfigKey {
+            name: "llm.profile",
+            // D017：只读键——档位经 [llm.profiles.<名字>] 定义，运行时 --profile 选用
+            get: |c| c.active_profile.clone().unwrap_or_else(|| "default".into()),
+            set: |_fc, _v| {
+                Err(CsError::new(
+                    CONFIG_INVALID,
+                    "llm.profile 只读：档位经 [llm.profiles.<名字>] 定义，运行时用 --profile 选用",
+                ))
             },
         },
         ConfigKey {
@@ -434,6 +503,7 @@ pub fn to_file_view(cfg: &Config) -> FileConfig {
             base_url: Some(cfg.llm.base_url.clone()),
             api_key: cfg.llm.api_key.clone(),
             model: Some(cfg.llm.model.clone()),
+            profiles: Default::default(),
         },
         context: FileContext::default(),
         vector: FileVector {
@@ -478,14 +548,29 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let g = dir.path().join("g.toml");
         let mut fc = FileConfig::default();
+        // D017 只读键：set 必须拒绝，不走 set→get 往返（get 期望缺省值）
+        const READ_ONLY_KEYS: &[&str] = &["llm.profile"];
         for k in config_key_table() {
+            if READ_ONLY_KEYS.contains(&k.name) {
+                assert!(
+                    (k.set)(&mut fc, "x".into()).is_err(),
+                    "只读键 {} 的 set 应拒绝",
+                    k.name
+                );
+                continue;
+            }
             (k.set)(&mut fc, sample_value(k.name).to_string()).unwrap();
         }
         std::fs::write(&g, toml::to_string_pretty(&fc).unwrap()).unwrap();
         let cfg = load_layered(Some(&g), None, CliOverrides::default()).unwrap();
         for k in config_key_table() {
             let got = resolved_get(&cfg, k.name).unwrap();
-            assert_eq!(got, expected_value(k.name), "键 {} 回读不符", k.name);
+            let want = if READ_ONLY_KEYS.contains(&k.name) {
+                "default"
+            } else {
+                expected_value(k.name)
+            };
+            assert_eq!(got, want, "键 {} 回读不符", k.name);
         }
         // 未知键：set/get 都报 CS1012 且 hint 含全部键名（含新增 context.*/graph.bin）
         let err = apply_set(&mut fc, "nope.key", "1".into()).unwrap_err();
@@ -597,6 +682,93 @@ mod tests {
     fn missing_files_fall_back_to_defaults() {
         let cfg = load_layered(None, None, CliOverrides::default()).unwrap();
         assert_eq!(cfg, Config::default());
+    }
+
+    #[test]
+    fn profile_overrides_connection_and_window() {
+        // D017：档位覆盖连接面全套 + 窗口；缺席字段跟随主 [llm]
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("c.toml");
+        write(
+            &p,
+            "[llm]\nmodel = \"main-model\"\nbase_url = \"http://main\"\napi_key = \"sk-main\"\n\
+             [llm.profiles.scout]\nmodel = \"scout-model\"\nmodel_context_tokens = 131072\n",
+        );
+        let cli = CliOverrides {
+            profile: Some("scout".into()),
+            ..Default::default()
+        };
+        let cfg = load_layered(None, Some(&p), cli).unwrap();
+        assert_eq!(cfg.llm.model, "scout-model", "档位 model 覆盖");
+        assert_eq!(
+            cfg.llm.base_url, "http://main",
+            "缺席 base_url 跟随主 [llm]"
+        );
+        assert_eq!(
+            cfg.llm.api_key.as_deref(),
+            Some("sk-main"),
+            "缺席 api_key 跟随"
+        );
+        assert_eq!(cfg.context.model_context_tokens, 131072, "窗口随档位");
+        assert_eq!(cfg.active_profile.as_deref(), Some("scout"));
+    }
+
+    #[test]
+    fn profile_full_override_and_cli_still_wins() {
+        // D017：档位全套覆盖可用；--model/--base-url 旗标永远最后覆写
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("c.toml");
+        write(
+            &p,
+            "[llm]\nmodel = \"main-model\"\nbase_url = \"http://main\"\n\
+             [llm.profiles.review]\nmodel = \"review-model\"\nbase_url = \"http://review\"\napi_key = \"sk-review\"\n",
+        );
+        let cli = CliOverrides {
+            profile: Some("review".into()),
+            model: Some("flag-model".into()),
+            ..Default::default()
+        };
+        let cfg = load_layered(None, Some(&p), cli).unwrap();
+        assert_eq!(cfg.llm.model, "flag-model", "旗标 > 档位");
+        assert_eq!(cfg.llm.base_url, "http://review", "旗标缺席字段用档位值");
+        assert_eq!(cfg.llm.api_key.as_deref(), Some("sk-review"));
+    }
+
+    #[test]
+    fn unknown_profile_lists_available_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("c.toml");
+        write(
+            &p,
+            "[llm.profiles.scout]\nmodel = \"a\"\n[llm.profiles.review]\nmodel = \"b\"\n",
+        );
+        let cli = CliOverrides {
+            profile: Some("nope".into()),
+            ..Default::default()
+        };
+        let err = load_layered(None, Some(&p), cli).unwrap_err();
+        assert_eq!(err.code, CONFIG_INVALID);
+        let hint = err.hint.unwrap_or_default();
+        assert!(
+            hint.contains("scout") && hint.contains("review"),
+            "应列出可用档位: {hint}"
+        );
+    }
+
+    #[test]
+    fn project_profile_overrides_global_same_name() {
+        // D017：项目层同名档位压全局
+        let dir = tempfile::tempdir().unwrap();
+        let g = dir.path().join("g.toml");
+        let pr = dir.path().join("p.toml");
+        write(&g, "[llm.profiles.scout]\nmodel = \"global-scout\"\n");
+        write(&pr, "[llm.profiles.scout]\nmodel = \"project-scout\"\n");
+        let cli = CliOverrides {
+            profile: Some("scout".into()),
+            ..Default::default()
+        };
+        let cfg = load_layered(Some(&g), Some(&pr), cli).unwrap();
+        assert_eq!(cfg.llm.model, "project-scout", "项目同名档位压全局");
     }
 
     #[test]

@@ -38,6 +38,9 @@ pub struct Cli {
     /// 覆盖 LLM base url
     #[arg(long, value_name = "URL")]
     pub base_url: Option<String>,
+    /// 模型档位（D017）：选用 [llm.profiles.<名字>] 定义的连接面；旗标 --model/--base-url 仍可再压
+    #[arg(long, value_name = "NAME")]
+    pub profile: Option<String>,
     /// 忽略 stale 索引，强制重建
     #[arg(long)]
     pub fresh_index: bool,
@@ -99,6 +102,7 @@ impl Cli {
         let overrides = CliOverrides {
             base_url: self.base_url.clone(),
             model: self.model.clone(),
+            profile: self.profile.clone(),
         };
         match self.command {
             Some(Command::Config { action }) => run_config(action),
@@ -212,6 +216,7 @@ impl Cli {
         let overrides = CliOverrides {
             base_url: self.base_url.clone(),
             model: self.model.clone(),
+            profile: self.profile.clone(),
         };
         let cfg = config::load(overrides)?;
         let api_key = cfg.resolve_api_key()?;
@@ -219,6 +224,7 @@ impl Cli {
             repo = %repo_abs.display(),
             model = %cfg.llm.model,
             base_url = %cfg.llm.base_url,
+            profile = %cfg.active_profile.clone().unwrap_or_else(|| "default".into()),
             "配置就绪"
         );
 

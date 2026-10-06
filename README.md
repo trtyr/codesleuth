@@ -73,6 +73,14 @@ repomap_budget = 24000                   # 任务导航图预算（字符）
 
 [behavior]
 thinking_on = false                      # 检索型任务默认关思考
+
+# 多模型档位（D017）：不同任务用不同模型，--profile 运行时选用
+[llm.profiles.scout]                     # 例：只读侦察专用
+model = "some-fast-model"
+model_context_tokens = 131072            # 可选；base_url / api_key 同理可覆盖，缺席跟随主 [llm]
+
+[llm.profiles.review]                    # 例：review 专用
+model = "some-strong-model"
 ```
 
 `--vector` 相关参数全在上面 `[vector]` 段；不配也能跑——不建索引时工具自动降级，`codesleuth index <path> --vector` 时用默认值。
@@ -91,6 +99,9 @@ codesleuth "鉴权中间件在哪，被哪些路由使用？" --repo /path/to/pr
 ```bash
 # 机器可读 JSON（schema 版本化，供上游 agent 消费）
 codesleuth "错误处理有哪些模式？" --repo . --json --out report.json
+
+# 多模型档位：--profile 选用 [llm.profiles.<名字>]；--model/--base-url 旗标仍可再压
+codesleuth "这个模块的测试覆盖如何？" --repo . --profile review
 
 # 聚焦子目录
 codesleuth "错误处理有哪些模式？" --repo . --focus "crates/**"
