@@ -1,1 +1,680 @@
-（这里必须是完整的真实 HTML；省略「Export Toolbar」要求，其余规格全部遵守）
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>codesleuth · 系统级全局架构图</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    background: #020617;
+    color: #e2e8f0;
+    min-height: 100vh;
+    padding: 24px;
+  }
+  .container { max-width: 1560px; margin: 0 auto; }
+  .header { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+  .pulse-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #34d399;
+    box-shadow: 0 0 0 0 rgba(52,211,153,0.7);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(52,211,153,0.7); }
+    70% { box-shadow: 0 0 0 8px rgba(52,211,153,0); }
+    100% { box-shadow: 0 0 0 0 rgba(52,211,153,0); }
+  }
+  h1 { font-size: 18px; font-weight: 700; color: #f1f5f9; letter-spacing: 0.5px; }
+  .subtitle { font-size: 11px; color: #94a3b8; margin-bottom: 18px; margin-left: 22px; }
+  .subtitle .l1 { color: #22d3ee; }
+  .subtitle .l2 { color: #34d399; }
+  .subtitle .l3 { color: #34d399; }
+  .subtitle .l4 { color: #fb7185; }
+  .subtitle .sid { color: #fb923c; }
+  .diagram-card { background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; padding: 16px; overflow: hidden; }
+  svg { display: block; width: 100%; height: auto; }
+  .summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 18px; }
+  .card { background: #0f172a; border: 1px solid #1e293b; border-radius: 10px; padding: 14px 16px; }
+  .card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .card-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .card-dot.cyan { background: #22d3ee; }
+  .card-dot.emerald { background: #34d399; }
+  .card-dot.violet { background: #a78bfa; }
+  .card-dot.rose { background: #fb7185; }
+  .card h3 { font-size: 12px; font-weight: 600; color: #f1f5f9; }
+  .card ul { list-style: none; font-size: 10px; color: #cbd5e1; line-height: 1.7; }
+  .card ul li::before { content: "▸ "; color: #64748b; }
+  .footer { margin-top: 16px; text-align: center; font-size: 9px; color: #64748b; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <div class="pulse-dot"></div>
+    <h1>codesleuth · 系统级全局架构图</h1>
+  </div>
+  <div class="subtitle">
+    <span class="l1">L1 入口</span> →
+    <span class="l2">L2 装配 (配置 / 索引 / 任务三轨)</span> →
+    <span class="l3">L3 主循环 (Harness::run)</span> →
+    <span class="l4">L4 旁路索引与安全面</span>
+    &nbsp;·&nbsp;
+    <span class="sid">session_id</span> 单点身份贯穿全程
+  </div>
+  <div class="diagram-card">
+    <svg viewBox="0 0 1500 1040" xmlns="http://www.w3.org/2000/svg" font-family="JetBrains Mono, monospace">
+      <defs>
+        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+          <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+        </pattern>
+        <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
+        </marker>
+        <marker id="arrow-rose" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#fb7185"/>
+        </marker>
+        <marker id="arrow-amber" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#fb923c"/>
+        </marker>
+        <marker id="arrow-violet" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#a78bfa"/>
+        </marker>
+        <marker id="arrow-emerald" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#34d399"/>
+        </marker>
+      </defs>
+      <rect width="1500" height="1040" fill="url(#grid)"/>
+
+      <!-- ===================== L1 · ENTRY ===================== -->
+      <text x="40" y="92" fill="#22d3ee" font-size="11" font-weight="700">L1 · 入口</text>
+      <line x1="40" y1="98" x2="120" y2="98" stroke="#22d3ee" stroke-width="1.5"/>
+
+      <rect x="610" y="100" width="110" height="60" rx="6" fill="#0f172a"/>
+      <rect x="610" y="100" width="110" height="60" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="665" y="128" fill="white" font-size="13" font-weight="700" text-anchor="middle">main()</text>
+      <text x="665" y="144" fill="#94a3b8" font-size="8" text-anchor="middle">CLI 入口</text>
+
+      <rect x="750" y="100" width="180" height="60" rx="6" fill="#0f172a"/>
+      <rect x="750" y="100" width="180" height="60" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="840" y="124" fill="white" font-size="12" font-weight="600" text-anchor="middle">init_tracing</text>
+      <text x="840" y="140" fill="#94a3b8" font-size="8" text-anchor="middle">EnvFilter · stderr/file</text>
+      <text x="840" y="152" fill="#94a3b8" font-size="8" text-anchor="middle">64MB 单代轮转</text>
+
+      <rect x="960" y="100" width="160" height="60" rx="6" fill="#0f172a"/>
+      <rect x="960" y="100" width="160" height="60" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="1040" y="124" fill="white" font-size="13" font-weight="700" text-anchor="middle">Cli::run</text>
+      <text x="1040" y="140" fill="#94a3b8" font-size="8" text-anchor="middle">子命令派发</text>
+      <text x="1040" y="152" fill="#94a3b8" font-size="8" text-anchor="middle">config / index / task</text>
+
+      <rect x="1160" y="110" width="200" height="40" rx="4" fill="rgba(251,146,60,0.3)" stroke="#fb923c" stroke-width="1"/>
+      <text x="1260" y="128" fill="#fb923c" font-size="11" font-weight="700" text-anchor="middle">session_id</text>
+      <text x="1260" y="142" fill="#fb923c" font-size="8" text-anchor="middle">单点身份 · 全程贯穿</text>
+
+      <line x1="720" y1="130" x2="750" y2="130" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+      <line x1="930" y1="130" x2="960" y2="130" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+      <line x1="1120" y1="130" x2="1160" y2="130" stroke="#fb923c" stroke-width="1.5" marker-end="url(#arrow-amber)"/>
+      <text x="1140" y="124" fill="#fb923c" font-size="7" text-anchor="middle">identity</text>
+
+      <!-- dispatch bus -->
+      <line x1="1040" y1="160" x2="1040" y2="195" stroke="#64748b" stroke-width="1.5"/>
+      <line x1="160" y1="195" x2="1085" y2="195" stroke="#64748b" stroke-width="1.5"/>
+      <line x1="160" y1="195" x2="160" y2="215" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+      <line x1="625" y1="195" x2="625" y2="215" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+      <line x1="1090" y1="195" x2="1090" y2="215" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+      <text x="1040" y="208" fill="#94a3b8" font-size="8" text-anchor="middle">dispatch by subcommand</text>
+
+      <!-- ===================== L2 · ASSEMBLY ===================== -->
+      <text x="40" y="208" fill="#34d399" font-size="11" font-weight="700">L2 · 装配</text>
+      <line x1="40" y1="214" x2="120" y2="214" stroke="#34d399" stroke-width="1.5"/>
+
+      <!-- Track A: Config -->
+      <rect x="55" y="220" width="445" height="220" rx="8" fill="none" stroke="#1e293b" stroke-width="1" stroke-dasharray="4,4"/>
+      <text x="68" y="238" fill="#34d399" font-size="9" font-weight="700">配置轨 · run_config</text>
+
+      <rect x="75" y="250" width="130" height="50" rx="6" fill="#0f172a"/>
+      <rect x="75" y="250" width="130" height="50" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="140" y="273" fill="white" font-size="11" font-weight="600" text-anchor="middle">run_config</text>
+      <text x="140" y="287" fill="#94a3b8" font-size="8" text-anchor="middle">Get / Set / Path</text>
+
+      <rect x="230" y="250" width="140" height="50" rx="6" fill="#0f172a"/>
+      <rect x="230" y="250" width="140" height="50" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="300" y="273" fill="white" font-size="11" font-weight="600" text-anchor="middle">config::load</text>
+      <text x="300" y="287" fill="#94a3b8" font-size="8" text-anchor="middle">load_layered</text>
+
+      <rect x="395" y="250" width="90" height="50" rx="6" fill="#0f172a"/>
+      <rect x="395" y="250" width="90" height="50" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="440" y="282" fill="white" font-size="13" font-weight="700" text-anchor="middle">Config</text>
+
+      <line x1="205" y1="275" x2="230" y2="275" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+      <line x1="370" y1="275" x2="395" y2="275" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+      <rect x="75" y="325" width="180" height="28" rx="4" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1"/>
+      <text x="165" y="343" fill="white" font-size="9" text-anchor="middle">CLI 覆写 (最高优先)</text>
+
+      <rect x="265" y="325" width="180" height="28" rx="4" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1"/>
+      <text x="355" y="343" fill="white" font-size="9" text-anchor="middle">.codesleuth/config.toml (项目)</text>
+
+      <rect x="75" y="361" width="180" height="28" rx="4" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1"/>
+      <text x="165" y="379" fill="white" font-size="9" text-anchor="middle">~/.codesleuth/config.toml (全局)</text>
+
+      <rect x="265" y="361" width="180" height="28" rx="4" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1"/>
+      <text x="355" y="379" fill="white" font-size="9" text-anchor="middle">default (兜底)</text>
+
+      <line x1="300" y1="300" x2="300" y2="325" stroke="#64748b" stroke-width="1" stroke-dasharray="3,3" marker-end="url(#arrow)"/>
+      <text x="310" y="316" fill="#94a3b8" font-size="8">四层合并</text>
+
+      <!-- Track B: Index -->
+      <rect x="520" y="220" width="455" height="220" rx="8" fill="none" stroke="#1e293b" stroke-width="1" stroke-dasharray="4,4"/>
+      <text x="533" y="238" fill="#a78bfa" font-size="9" font-weight="700">索引轨 · run_index_vector (写侧)</text>
+
+      <rect x="540" y="250" width="170" height="50" rx="6" fill="#0f172a"/>
+      <rect x="540" y="250" width="170" height="50" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="625" y="273" fill="white" font-size="11" font-weight="600" text-anchor="middle">run_index_vector</text>
+      <text x="625" y="287" fill="#94a3b8" font-size="8" text-anchor="middle">index --vector (写侧)</text>
+
+      <rect x="540" y="325" width="100" height="42" rx="6" fill="#0f172a"/>
+      <rect x="540" y="325" width="100" height="42" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="590" y="345" fill="white" font-size="11" font-weight="600" text-anchor="middle">bootlock</text>
+      <text x="590" y="358" fill="#94a3b8" font-size="7" text-anchor="middle">flock 串行化</text>
+
+      <rect x="735" y="250" width="120" height="50" rx="6" fill="#0f172a"/>
+      <rect x="735" y="250" width="120" height="50" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="795" y="273" fill="white" font-size="11" font-weight="600" text-anchor="middle">plan_chunks</text>
+      <text x="795" y="287" fill="#94a3b8" font-size="8" text-anchor="middle">三层切块</text>
+
+      <rect x="730" y="325" width="135" height="50" rx="6" fill="#0f172a"/>
+      <rect x="730" y="325" width="135" height="50" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="797" y="347" fill="white" font-size="11" font-weight="600" text-anchor="middle">compose_input</text>
+      <text x="797" y="361" fill="#94a3b8" font-size="8" text-anchor="middle">EmbedMode cap=20</text>
+
+      <rect x="885" y="250" width="80" height="50" rx="6" fill="#0f172a"/>
+      <rect x="885" y="250" width="80" height="50" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="925" y="273" fill="white" font-size="11" font-weight="600" text-anchor="middle">Embed</text>
+      <text x="925" y="287" fill="#94a3b8" font-size="8" text-anchor="middle">Client</text>
+
+      <rect x="735" y="390" width="115" height="32" rx="4" fill="#0f172a"/>
+      <rect x="735" y="390" width="115" height="32" rx="4" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="792" y="410" fill="white" font-size="10" font-weight="600" text-anchor="middle">commit_build</text>
+
+      <rect x="870" y="390" width="95" height="32" rx="4" fill="#0f172a"/>
+      <rect x="870" y="390" width="95" height="32" rx="4" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="917" y="410" fill="white" font-size="10" font-weight="600" text-anchor="middle">vectors.db</text>
+
+      <line x1="710" y1="275" x2="735" y2="275" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+      <line x1="855" y1="275" x2="885" y2="275" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+      <line x1="797" y1="300" x2="797" y2="325" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+      <line x1="860" y1="350" x2="870" y2="375" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrow-violet)"/>
+      <line x1="797" y1="375" x2="792" y2="390" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrow-violet)"/>
+      <line x1="850" y1="406" x2="870" y2="406" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrow-violet)"/>
+      <line x1="625" y1="300" x2="590" y2="325" stroke="#fb7185" stroke-width="1" stroke-dasharray="3,3" marker-end="url(#arrow-rose)"/>
+      <text x="595" y="316" fill="#fb7185" font-size="7" text-anchor="middle">acquire_guard</text>
+
+      <!-- Track C: Task -->
+      <rect x="990" y="220" width="480" height="220" rx="8" fill="none" stroke="#1e293b" stroke-width="1" stroke-dasharray="4,4"/>
+      <text x="1003" y="238" fill="#34d399" font-size="9" font-weight="700">任务轨 · run_task_inner</text>
+
+      <rect x="1005" y="250" width="170" height="50" rx="6" fill="#0f172a"/>
+      <rect x="1005" y="250" width="170" height="50" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="1090" y="273" fill="white" font-size="11" font-weight="600" text-anchor="middle">run_task_inner</text>
+      <text x="1090" y="287" fill="#94a3b8" font-size="8" text-anchor="middle">任务装配入口</text>
+
+      <rect x="1190" y="250" width="100" height="50" rx="6" fill="#0f172a"/>
+      <rect x="1190" y="250" width="100" height="50" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="1240" y="273" fill="white" font-size="11" font-weight="600" text-anchor="middle">Audit</text>
+      <text x="1240" y="287" fill="#94a3b8" font-size="8" text-anchor="middle">JSONL 账本</text>
+
+      <rect x="1305" y="250" width="100" height="50" rx="6" fill="#0f172a"/>
+      <rect x="1305" y="250" width="100" height="50" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="1355" y="273" fill="white" font-size="11" font-weight="600" text-anchor="middle">Fence</text>
+      <text x="1355" y="287" fill="#94a3b8" font-size="8" text-anchor="middle">路径围栏</text>
+
+      <rect x="1005" y="320" width="155" height="50" rx="6" fill="#0f172a"/>
+      <rect x="1005" y="320" width="155" height="50" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="1082" y="342" fill="white" font-size="11" font-weight="600" text-anchor="middle">ToolRegistry</text>
+      <text x="1082" y="357" fill="#94a3b8" font-size="8" text-anchor="middle">name 索引 + Schema</text>
+
+      <rect x="1175" y="320" width="120" height="50" rx="6" fill="#0f172a"/>
+      <rect x="1175" y="320" width="120" height="50" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="1235" y="342" fill="white" font-size="11" font-weight="600" text-anchor="middle">RecallEngine</text>
+      <text x="1235" y="357" fill="#94a3b8" font-size="8" text-anchor="middle">三段式召回</text>
+
+      <rect x="1310" y="320" width="150" height="50" rx="6" fill="#0f172a"/>
+      <rect x="1310" y="320" width="150" height="50" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="1385" y="337" fill="white" font-size="10" font-weight="600" text-anchor="middle">codegraph (5 MCP)</text>
+      <text x="1385" y="350" fill="#94a3b8" font-size="7" text-anchor="middle">explore · callers ·</text>
+      <text x="1385" y="361" fill="#94a3b8" font-size="7" text-anchor="middle">callees · impact · files</text>
+
+      <line x1="1175" y1="275" x2="1190" y2="275" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+      <line x1="1290" y1="275" x2="1305" y2="275" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+      <line x1="1082" y1="300" x2="1082" y2="320" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+      <line x1="1175" y1="300" x2="1235" y2="320" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+      <line x1="1175" y1="300" x2="1385" y2="320" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+      <line x1="1090" y1="300" x2="1090" y2="320" stroke="#64748b" stroke-width="0"/>
+      <line x1="1090" y1="300" x2="1175" y2="320" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+      <!-- tools list caption -->
+      <rect x="1005" y="385" width="450" height="42" rx="4" fill="rgba(15,23,42,0.6)" stroke="#1e293b" stroke-width="1"/>
+      <text x="1015" y="400" fill="#94a3b8" font-size="9" font-weight="600">5 Tools :</text>
+      <text x="1063" y="400" fill="#34d399" font-size="9">Read</text>
+      <text x="1098" y="400" fill="#64748b" font-size="9">·</text>
+      <text x="1106" y="400" fill="#34d399" font-size="9">FileFinder</text>
+      <text x="1170" y="400" fill="#64748b" font-size="9">·</text>
+      <text x="1178" y="400" fill="#34d399" font-size="9">Grep</text>
+      <text x="1213" y="400" fill="#64748b" font-size="9">·</text>
+      <text x="1221" y="400" fill="#34d399" font-size="9">VectorSearch</text>
+      <text x="1305" y="400" fill="#64748b" font-size="9">·</text>
+      <text x="1313" y="400" fill="#34d399" font-size="9">codegraph 5 MCP</text>
+      <text x="1015" y="418" fill="#64748b" font-size="8">ToolSchema 导出 · reg.get(name) → Tool::execute</text>
+
+      <!-- Config → L3 cross-layer -->
+      <path d="M 440 300 L 440 455 L 405 455 L 405 495" fill="none" stroke="#a78bfa" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-violet)"/>
+      <text x="445" y="430" fill="#a78bfa" font-size="8">Config 注入</text>
+
+      <!-- run_task_inner → L3 -->
+      <path d="M 1090 370 L 1090 455 L 405 455 L 405 495" fill="none" stroke="#34d399" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-emerald)"/>
+      <text x="700" y="450" fill="#34d399" font-size="8">ToolRegistry + RecallEngine + Audit + Fence 注入 Harness</text>
+
+      <!-- ToolRegistry → reg.get -->
+      <line x1="1082" y1="370" x2="992" y2="495" stroke="#64748b" stroke-width="1" stroke-dasharray="3,3" marker-end="url(#arrow)"/>
+
+      <!-- RecallEngine → recall area -->
+      <line x1="1235" y1="370" x2="1300" y2="620" stroke="#34d399" stroke-width="1" stroke-dasharray="3,3" marker-end="url(#arrow-emerald)"/>
+      <text x="1255" y="500" fill="#34d399" font-size="8">回灌原文</text>
+
+      <!-- ===================== L3 · MAIN LOOP ===================== -->
+      <text x="40" y="468" fill="#34d399" font-size="11" font-weight="700">L3 · 主循环</text>
+      <line x1="40" y1="474" x2="120" y2="474" stroke="#34d399" stroke-width="1.5"/>
+
+      <rect x="55" y="480" width="1415" height="225" rx="8" fill="none" stroke="#1e293b" stroke-width="1" stroke-dasharray="4,4"/>
+
+      <!-- SYSTEM_PROMPT -->
+      <rect x="75" y="495" width="170" height="60" rx="6" fill="#0f172a"/>
+      <rect x="75" y="495" width="170" height="60" rx="6" fill="rgba(251,146,60,0.3)" stroke="#fb923c" stroke-width="1.5"/>
+      <text x="160" y="517" fill="white" font-size="11" font-weight="700" text-anchor="middle">SYSTEM_PROMPT</text>
+      <text x="160" y="531" fill="#94a3b8" font-size="7" text-anchor="middle">只读身份 · 行为边界</text>
+      <text x="160" y="543" fill="#94a3b8" font-size="7" text-anchor="middle">无空转 · 输出契约</text>
+
+      <!-- first_user_suffix -->
+      <rect x="75" y="625" width="170" height="60" rx="6" fill="#0f172a"/>
+      <rect x="75" y="625" width="170" height="60" rx="6" fill="rgba(251,146,60,0.3)" stroke="#fb923c" stroke-width="1.5"/>
+      <text x="160" y="647" fill="white" font-size="11" font-weight="700" text-anchor="middle">first_user_suffix</text>
+      <text x="160" y="661" fill="#94a3b8" font-size="7" text-anchor="middle">vector recall 起步</text>
+      <text x="160" y="673" fill="#94a3b8" font-size="7" text-anchor="middle">+ [repo map] 段</text>
+
+      <!-- Harness::run big box -->
+      <rect x="275" y="495" width="240" height="195" rx="8" fill="#0f172a"/>
+      <rect x="275" y="495" width="240" height="195" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="2"/>
+      <text x="395" y="520" fill="white" font-size="14" font-weight="700" text-anchor="middle">Harness::run</text>
+      <text x="395" y="535" fill="#94a3b8" font-size="8" text-anchor="middle">主循环 (每轮迭代)</text>
+      <line x1="290" y1="544" x2="500" y2="544" stroke="#1e293b" stroke-width="1"/>
+      <text x="285" y="562" fill="#fb923c" font-size="10" font-weight="700">①</text>
+      <text x="300" y="562" fill="white" font-size="10">should_compact?</text>
+      <text x="285" y="582" fill="#fb923c" font-size="10" font-weight="700">②</text>
+      <text x="300" y="582" fill="white" font-size="10">provider.chat (LlmProvider)</text>
+      <text x="285" y="602" fill="#fb923c" font-size="10" font-weight="700">③</text>
+      <text x="300" y="602" fill="white" font-size="10">reg.get → Tool::execute</text>
+      <text x="285" y="622" fill="#fb923c" font-size="10" font-weight="700">④</text>
+      <text x="300" y="622" fill="white" font-size="10">observe + record</text>
+      <text x="285" y="642" fill="#fb923c" font-size="10" font-weight="700">⑤</text>
+      <text x="300" y="642" fill="white" font-size="10">submit_report / 熔断</text>
+      <text x="285" y="665" fill="#fb923c" font-size="9" font-style="italic">↻ 每轮循环, 直至熔断</text>
+      <text x="285" y="679" fill="#94a3b8" font-size="8">Arc&lt;dyn LlmProvider&gt; · ToolRegistry</text>
+
+      <!-- top row of L3 -->
+      <rect x="540" y="500" width="120" height="50" rx="6" fill="#0f172a"/>
+      <rect x="540" y="500" width="120" height="50" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="600" y="520" fill="white" font-size="10" font-weight="600" text-anchor="middle">should_compact</text>
+      <text x="600" y="533" fill="#94a3b8" font-size="7" text-anchor="middle">三段式零 LLM</text>
+      <text x="600" y="544" fill="#94a3b8" font-size="7" text-anchor="middle">窗口 × 百分比</text>
+
+      <rect x="680" y="500" width="150" height="50" rx="6" fill="#0f172a"/>
+      <rect x="680" y="500" width="150" height="50" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="755" y="520" fill="white" font-size="10" font-weight="600" text-anchor="middle">LlmProvider</text>
+      <text x="755" y="533" fill="#94a3b8" font-size="7" text-anchor="middle">OpenAiProvider · chat</text>
+      <text x="755" y="544" fill="#94a3b8" font-size="7" text-anchor="middle">重试退避 · CS2xxx</text>
+
+      <rect x="850" y="500" width="130" height="50" rx="6" fill="#0f172a"/>
+      <rect x="850" y="500" width="130" height="50" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="915" y="520" fill="white" font-size="10" font-weight="600" text-anchor="middle">reg.get(name)</text>
+      <text x="915" y="533" fill="#94a3b8" font-size="7" text-anchor="middle">→ Tool::execute</text>
+      <text x="915" y="544" fill="#94a3b8" font-size="7" text-anchor="middle">tool_call 调度</text>
+
+      <rect x="1000" y="500" width="120" height="50" rx="6" fill="#0f172a"/>
+      <rect x="1000" y="500" width="120" height="50" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="1060" y="520" fill="white" font-size="10" font-weight="600" text-anchor="middle">Audit::record</text>
+      <text x="1060" y="533" fill="#94a3b8" font-size="7" text-anchor="middle">seq 单调</text>
+      <text x="1060" y="544" fill="#94a3b8" font-size="7" text-anchor="middle">JSONL 追加</text>
+
+      <rect x="1140" y="500" width="155" height="50" rx="6" fill="#0f172a"/>
+      <rect x="1140" y="500" width="155" height="50" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="1217" y="520" fill="white" font-size="10" font-weight="600" text-anchor="middle">EvidenceStore.observe</text>
+      <text x="1217" y="533" fill="#94a3b8" font-size="7" text-anchor="middle">path → first seq</text>
+      <text x="1217" y="544" fill="#94a3b8" font-size="7" text-anchor="middle">submit 锚点校验</text>
+
+      <!-- middle row of L3 -->
+      <rect x="540" y="565" width="120" height="50" rx="6" fill="#0f172a"/>
+      <rect x="540" y="565" width="120" height="50" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="600" y="585" fill="white" font-size="10" font-weight="600" text-anchor="middle">submit_report</text>
+      <text x="600" y="598" fill="#94a3b8" font-size="7" text-anchor="middle">提交型 Report</text>
+      <text x="600" y="609" fill="#94a3b8" font-size="7" text-anchor="middle">EvidenceStore 校验</text>
+
+      <rect x="680" y="565" width="150" height="50" rx="6" fill="#0f172a"/>
+      <rect x="680" y="565" width="150" height="50" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="755" y="585" fill="white" font-size="10" font-weight="600" text-anchor="middle">build_report</text>
+      <text x="755" y="598" fill="#94a3b8" font-size="7" text-anchor="middle">Report schema 装配</text>
+      <text x="755" y="609" fill="#94a3b8" font-size="7" text-anchor="middle">validate</text>
+
+      <rect x="850" y="565" width="130" height="50" rx="6" fill="#0f172a"/>
+      <rect x="850" y="565" width="130" height="50" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="915" y="585" fill="white" font-size="10" font-weight="600" text-anchor="middle">render_human</text>
+      <text x="915" y="598" fill="#94a3b8" font-size="7" text-anchor="middle">人类可读 answer</text>
+
+      <rect x="1000" y="565" width="120" height="50" rx="6" fill="#0f172a"/>
+      <rect x="1000" y="565" width="120" height="50" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="1060" y="585" fill="white" font-size="10" font-weight="600" text-anchor="middle">degraded_prose</text>
+      <text x="1060" y="598" fill="#94a3b8" font-size="7" text-anchor="middle">兜底降级</text>
+      <text x="1060" y="609" fill="#94a3b8" font-size="7" text-anchor="middle">无结构化发现时</text>
+
+      <rect x="1140" y="565" width="155" height="50" rx="6" fill="#0f172a"/>
+      <rect x="1140" y="565" width="155" height="50" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="1217" y="585" fill="white" font-size="10" font-weight="600" text-anchor="middle">RunOutcome</text>
+      <text x="1217" y="598" fill="#94a3b8" font-size="7" text-anchor="middle">最终回填 · Cli 落盘</text>
+
+      <!-- reports file -->
+      <rect x="1140" y="630" width="155" height="32" rx="4" fill="#0f172a"/>
+      <rect x="1140" y="630" width="155" height="32" rx="4" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="1217" y="650" fill="white" font-size="9" font-weight="600" text-anchor="middle">~/.codesleuth/reports/&lt;sid&gt;.md + .json</text>
+
+      <!-- bottom row: sidecar hooks -->
+      <rect x="540" y="630" width="120" height="32" rx="4" fill="#0f172a"/>
+      <rect x="540" y="630" width="120" height="32" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="600" y="650" fill="white" font-size="9" font-weight="600" text-anchor="middle">build_handoff</text>
+
+      <rect x="680" y="630" width="150" height="32" rx="4" fill="#0f172a"/>
+      <rect x="680" y="630" width="150" height="32" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="755" y="650" fill="white" font-size="9" font-weight="600" text-anchor="middle">recall tool (回灌)</text>
+
+      <rect x="850" y="630" width="130" height="32" rx="4" fill="#0f172a"/>
+      <rect x="850" y="630" width="130" height="32" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="915" y="650" fill="white" font-size="9" font-weight="600" text-anchor="middle">extract_tool_text</text>
+
+      <rect x="1000" y="630" width="120" height="32" rx="4" fill="#0f172a"/>
+      <rect x="1000" y="630" width="120" height="32" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="1060" y="650" fill="white" font-size="9" font-weight="600" text-anchor="middle">report_error</text>
+
+      <!-- L3 arrows -->
+      <line x1="245" y1="525" x2="275" y2="525" stroke="#fb923c" stroke-width="1.5" marker-end="url(#arrow-amber)"/>
+      <text x="252" y="517" fill="#fb923c" font-size="7">PROMPT</text>
+      <line x1="245" y1="655" x2="275" y2="655" stroke="#fb923c" stroke-width="1.5" marker-end="url(#arrow-amber)"/>
+      <text x="252" y="647" fill="#fb923c" font-size="7">suffix</text>
+
+      <line x1="515" y1="525" x2="540" y2="525" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-emerald)"/>
+      <line x1="660" y1="525" x2="680" y2="525" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-emerald)"/>
+      <line x1="830" y1="525" x2="850" y2="525" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-emerald)"/>
+      <line x1="980" y1="525" x2="1000" y2="525" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-emerald)"/>
+      <line x1="1120" y1="525" x2="1140" y2="525" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-emerald)"/>
+
+      <line x1="515" y1="590" x2="540" y2="590" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-emerald)"/>
+      <line x1="660" y1="590" x2="680" y2="590" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-emerald)"/>
+      <line x1="830" y1="590" x2="850" y2="590" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-emerald)"/>
+      <line x1="980" y1="590" x2="1000" y2="590" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-emerald)"/>
+      <line x1="1120" y1="590" x2="1140" y2="590" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-emerald)"/>
+
+      <line x1="600" y1="550" x2="600" y2="565" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-emerald)"/>
+      <line x1="915" y1="550" x2="915" y2="565" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-emerald)"/>
+      <line x1="1060" y1="550" x2="1060" y2="565" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-emerald)"/>
+      <line x1="1217" y1="615" x2="1217" y2="630" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrow-violet)"/>
+
+      <!-- Harness cycle loop -->
+      <path d="M 275 555 Q 250 555 250 605 Q 250 660 275 660" fill="none" stroke="#fb923c" stroke-width="1" stroke-dasharray="4,4" marker-end="url(#arrow-amber)"/>
+      <text x="238" y="610" fill="#fb923c" font-size="7" text-anchor="middle">迭代</text>
+
+      <!-- ===================== L4 · SIDECAR & SECURITY ===================== -->
+      <text x="40" y="735" fill="#fb7185" font-size="11" font-weight="700">L4 · 旁路索引与安全面</text>
+      <line x1="40" y1="741" x2="180" y2="741" stroke="#fb7185" stroke-width="1.5"/>
+
+      <rect x="55" y="747" width="1415" height="218" rx="12" fill="none" stroke="#fb7185" stroke-width="1" stroke-dasharray="8,4"/>
+      <text x="68" y="763" fill="#fb7185" font-size="9" font-weight="700">四道安全围栏 · 跨进程索引 · 账本回灌</text>
+
+      <!-- Row 1 of L4 -->
+      <rect x="75" y="775" width="160" height="60" rx="6" fill="#0f172a"/>
+      <rect x="75" y="775" width="160" height="60" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="155" y="798" fill="white" font-size="12" font-weight="700" text-anchor="middle">Fence</text>
+      <text x="155" y="812" fill="#94a3b8" font-size="7" text-anchor="middle">词汇预检 + dunce</text>
+      <text x="155" y="823" fill="#94a3b8" font-size="7" text-anchor="middle">canonicalize 复检</text>
+
+      <rect x="250" y="775" width="160" height="60" rx="6" fill="#0f172a"/>
+      <rect x="250" y="775" width="160" height="60" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="330" y="798" fill="white" font-size="12" font-weight="700" text-anchor="middle">bootlock</text>
+      <text x="330" y="812" fill="#94a3b8" font-size="7" text-anchor="middle">flock 跨进程</text>
+      <text x="330" y="823" fill="#94a3b8" font-size="7" text-anchor="middle">acquire_guard 串行化</text>
+
+      <rect x="425" y="775" width="160" height="60" rx="6" fill="#0f172a"/>
+      <rect x="425" y="775" width="160" height="60" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="505" y="798" fill="white" font-size="12" font-weight="700" text-anchor="middle">writeguard</text>
+      <text x="505" y="812" fill="#94a3b8" font-size="7" text-anchor="middle">snapshot + diff</text>
+      <text x="505" y="823" fill="#94a3b8" font-size="7" text-anchor="middle">任务起止自证</text>
+
+      <rect x="600" y="775" width="180" height="60" rx="6" fill="#0f172a"/>
+      <rect x="600" y="775" width="180" height="60" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="690" y="798" fill="white" font-size="12" font-weight="700" text-anchor="middle">Audit JSONL</text>
+      <text x="690" y="812" fill="#94a3b8" font-size="7" text-anchor="middle">~.codesleuth/audit/&lt;sid&gt;.jsonl</text>
+      <text x="690" y="823" fill="#94a3b8" font-size="7" text-anchor="middle">seq 单调 · G2 校验</text>
+
+      <rect x="795" y="775" width="150" height="60" rx="6" fill="#0f172a"/>
+      <rect x="795" y="775" width="150" height="60" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="870" y="798" fill="white" font-size="12" font-weight="700" text-anchor="middle">EvidenceStore</text>
+      <text x="870" y="812" fill="#94a3b8" font-size="7" text-anchor="middle">path → first seq</text>
+      <text x="870" y="823" fill="#94a3b8" font-size="7" text-anchor="middle">submit 锚点</text>
+
+      <rect x="960" y="775" width="150" height="60" rx="6" fill="#0f172a"/>
+      <rect x="960" y="775" width="150" height="60" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="1035" y="798" fill="white" font-size="12" font-weight="700" text-anchor="middle">recall tool</text>
+      <text x="1035" y="812" fill="#94a3b8" font-size="7" text-anchor="middle">按审计 seq 区间</text>
+      <text x="1035" y="823" fill="#94a3b8" font-size="7" text-anchor="middle">回灌被驱逐原文</text>
+
+      <rect x="1125" y="775" width="160" height="60" rx="6" fill="#0f172a"/>
+      <rect x="1125" y="775" width="160" height="60" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="1205" y="798" fill="white" font-size="12" font-weight="700" text-anchor="middle">McpClient</text>
+      <text x="1205" y="812" fill="#94a3b8" font-size="7" text-anchor="middle">newline JSON-RPC · stdio</text>
+      <text x="1205" y="823" fill="#94a3b8" font-size="7" text-anchor="middle">protocolVersion 2025-03-26</text>
+
+      <rect x="1300" y="775" width="155" height="60" rx="6" fill="#0f172a"/>
+      <rect x="1300" y="775" width="155" height="60" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="1377" y="798" fill="white" font-size="12" font-weight="700" text-anchor="middle">codegraph 子进程</text>
+      <text x="1377" y="812" fill="#94a3b8" font-size="7" text-anchor="middle">CodegraphEngine</text>
+      <text x="1377" y="823" fill="#94a3b8" font-size="7" text-anchor="middle">独占 Arc · Drop 回收</text>
+
+      <!-- Row 2 of L4 -->
+      <rect x="75" y="855" width="190" height="60" rx="6" fill="#0f172a"/>
+      <rect x="75" y="855" width="190" height="60" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="170" y="878" fill="white" font-size="11" font-weight="600" text-anchor="middle">init_tracing (双轨)</text>
+      <text x="170" y="892" fill="#94a3b8" font-size="7" text-anchor="middle">stderr + ~/.codesleuth/logs/</text>
+      <text x="170" y="903" fill="#94a3b8" font-size="7" text-anchor="middle">64MB 单代轮转 · .log.old</text>
+
+      <rect x="280" y="855" width="170" height="60" rx="6" fill="#0f172a"/>
+      <rect x="280" y="855" width="170" height="60" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="365" y="878" fill="white" font-size="11" font-weight="600" text-anchor="middle">build_repo_map</text>
+      <text x="365" y="892" fill="#94a3b8" font-size="7" text-anchor="middle">24000 字符预算</text>
+      <text x="365" y="903" fill="#94a3b8" font-size="7" text-anchor="middle">度数中心度贪心</text>
+
+      <rect x="465" y="855" width="150" height="60" rx="6" fill="#0f172a"/>
+      <rect x="465" y="855" width="150" height="60" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="540" y="878" fill="white" font-size="11" font-weight="600" text-anchor="middle">format_recall_block</text>
+      <text x="540" y="892" fill="#94a3b8" font-size="7" text-anchor="middle">tool 消费 +</text>
+      <text x="540" y="903" fill="#94a3b8" font-size="7" text-anchor="middle">first_user_suffix 注入</text>
+
+      <rect x="630" y="855" width="170" height="60" rx="6" fill="#0f172a"/>
+      <rect x="630" y="855" width="170" height="60" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="715" y="878" fill="white" font-size="11" font-weight="600" text-anchor="middle">CsError 五字段</text>
+      <text x="715" y="892" fill="#94a3b8" font-size="7" text-anchor="middle">CS1xxx 退出码映射</text>
+      <text x="715" y="903" fill="#94a3b8" font-size="7" text-anchor="middle">report_error 三行 stderr</text>
+
+      <rect x="815" y="855" width="200" height="60" rx="6" fill="#0f172a"/>
+      <rect x="815" y="855" width="200" height="60" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="915" y="878" fill="white" font-size="11" font-weight="600" text-anchor="middle">VectorSearchTool</text>
+      <text x="915" y="892" fill="#94a3b8" font-size="7" text-anchor="middle">自然语言 → top-K 代码位置</text>
+      <text x="915" y="903" fill="#94a3b8" font-size="7" text-anchor="middle">EmbedClient::instruct_query</text>
+
+      <rect x="1030" y="855" width="200" height="60" rx="6" fill="#0f172a"/>
+      <rect x="1030" y="855" width="200" height="60" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="1130" y="878" fill="white" font-size="11" font-weight="600" text-anchor="middle">Read · FileFinder · Grep</text>
+      <text x="1130" y="892" fill="#94a3b8" font-size="7" text-anchor="middle">分页读取 / fff-search FilePicker</text>
+      <text x="1130" y="903" fill="#94a3b8" font-size="7" text-anchor="middle">plain · regex · fuzzy 三态</text>
+
+      <rect x="1245" y="855" width="210" height="60" rx="6" fill="#0f172a"/>
+      <rect x="1245" y="855" width="210" height="60" rx="6" fill="rgba(251,146,60,0.3)" stroke="#fb923c" stroke-width="1.5"/>
+      <text x="1350" y="878" fill="#fb923c" font-size="11" font-weight="600" text-anchor="middle">HNSW 影子 + 暴力</text>
+      <text x="1350" y="892" fill="#fb923c" font-size="7" text-anchor="middle">MIN_HNSW_SIZE=100_000</text>
+      <text x="1350" y="903" fill="#fb923c" font-size="7" text-anchor="middle">M=16 · EF_SEARCH=64 · k×3</text>
+
+      <!-- ============== Cross-layer security/audit flows ============== -->
+      <!-- Audit::record → Audit JSONL -->
+      <path d="M 1060 550 L 1060 740 L 690 740 L 690 775" fill="none" stroke="#fb7185" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-rose)"/>
+      <text x="870" y="733" fill="#fb7185" font-size="8" text-anchor="middle">append_line · seq+1</text>
+
+      <!-- EvidenceStore.observe → EvidenceStore -->
+      <path d="M 1217 550 L 1217 740 L 870 740 L 870 775" fill="none" stroke="#fb7185" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-rose)"/>
+      <text x="1050" y="733" fill="#fb7185" font-size="8" text-anchor="middle">register path</text>
+
+      <!-- Fence → wraps read tool path (show as containment arrow) -->
+      <path d="M 155 775 L 155 745" fill="none" stroke="#fb7185" stroke-width="1" stroke-dasharray="3,3" marker-end="url(#arrow-rose)"/>
+      <text x="160" y="755" fill="#fb7185" font-size="7">围栏</text>
+
+      <!-- bootlock → run_index_vector (L2) -->
+      <path d="M 330 775 L 330 740 L 590 740 L 590 367" fill="none" stroke="#fb7185" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-rose)"/>
+      <text x="350" y="730" fill="#fb7185" font-size="8">flock serializes</text>
+
+      <!-- writeguard → run_task_inner area -->
+      <path d="M 505 775 L 505 730 L 1090 730 L 1090 295" fill="none" stroke="#fb7185" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-rose)"/>
+      <text x="800" y="722" fill="#fb7185" font-size="8">start/end snapshot</text>
+
+      <!-- McpClient → codegraph subprocess -->
+      <line x1="1285" y1="805" x2="1300" y2="805" stroke="#fb7185" stroke-width="1.5" marker-end="url(#arrow-rose)"/>
+      <text x="1292" y="798" fill="#fb7185" font-size="7" text-anchor="middle">spawn / Drop</text>
+
+      <!-- McpClient → ToolRegistry via Harness (L3) -->
+      <path d="M 1205 775 L 1205 740 L 395 740 L 395 690" fill="none" stroke="#34d399" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-emerald)"/>
+      <text x="800" y="755" fill="#34d399" font-size="8">extract_tool_text 回注主循环</text>
+
+      <!-- recall tool → Harness (回灌) -->
+      <path d="M 1035 775 L 1035 740 L 755 740 L 755 662" fill="none" stroke="#34d399" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-emerald)"/>
+      <text x="900" y="755" fill="#34d399" font-size="8">回灌被驱逐原文</text>
+
+      <!-- Audit JSONL → recall tool -->
+      <line x1="780" y1="805" x2="960" y2="805" stroke="#fb7185" stroke-width="1" marker-end="url(#arrow-rose)"/>
+      <text x="870" y="800" fill="#fb7185" font-size="7" text-anchor="middle">按 seq 区间读取</text>
+
+      <!-- build_handoff → Audit JSONL -->
+      <path d="M 600 630 L 600 720 L 780 720 L 780 805" fill="none" stroke="#fb7185" stroke-width="1" stroke-dasharray="3,3" marker-end="url(#arrow-rose)"/>
+      <text x="615" y="712" fill="#fb7185" font-size="7">Audit::last_seq 起点</text>
+
+      <!-- build_repo_map → first_user_suffix -->
+      <path d="M 365 855 L 365 720 L 160 720 L 160 685" fill="none" stroke="#fb923c" stroke-width="1" stroke-dasharray="3,3" marker-end="url(#arrow-amber)"/>
+      <text x="240" y="712" fill="#fb923c" font-size="7">[repo map] 段拼入 suffix</text>
+
+      <!-- format_recall_block → first_user_suffix + tool -->
+      <path d="M 540 855 L 540 720 L 195 720 L 195 685" fill="none" stroke="#fb923c" stroke-width="1" stroke-dasharray="3,3" marker-end="url(#arrow-amber)"/>
+      <text x="380" y="712" fill="#fb923c" font-size="7">vector recall 起步线索</text>
+
+      <!-- init_tracing shared with L1 -->
+      <path d="M 170 855 L 170 740 L 840 740 L 840 160" fill="none" stroke="#94a3b8" stroke-width="1" stroke-dasharray="3,3" marker-end="url(#arrow)"/>
+      <text x="200" y="700" fill="#94a3b8" font-size="7">双轨日志 · session_id 同源</text>
+
+      <!-- CsError to CLI exit -->
+      <path d="M 715 855 L 715 720 L 1040 720 L 1040 160" fill="none" stroke="#94a3b8" stroke-width="1" stroke-dasharray="3,3" marker-end="url(#arrow)"/>
+      <text x="900" y="700" fill="#94a3b8" font-size="7">CsError → exit_code 映射 → Cli</text>
+
+      <!-- ===================== LEGEND ===================== -->
+      <rect x="55" y="985" width="1415" height="42" rx="6" fill="rgba(15,23,42,0.6)" stroke="#1e293b" stroke-width="1"/>
+      <text x="68" y="1003" fill="#94a3b8" font-size="9" font-weight="600">图例</text>
+
+      <rect x="105" y="996" width="14" height="14" rx="2" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1"/>
+      <text x="123" y="1007" fill="#cbd5e1" font-size="9">入口</text>
+
+      <rect x="170" y="996" width="14" height="14" rx="2" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1"/>
+      <text x="188" y="1007" fill="#cbd5e1" font-size="9">装配 / 后端</text>
+
+      <rect x="285" y="996" width="14" height="14" rx="2" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1"/>
+      <text x="303" y="1007" fill="#cbd5e1" font-size="9">持久化 / 输出</text>
+
+      <rect x="400" y="996" width="14" height="14" rx="2" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1"/>
+      <text x="418" y="1007" fill="#cbd5e1" font-size="9">安全围栏</text>
+
+      <rect x="515" y="996" width="14" height="14" rx="2" fill="rgba(251,146,60,0.3)" stroke="#fb923c" stroke-width="1"/>
+      <text x="533" y="1007" fill="#cbd5e1" font-size="9">Prompt / 标识</text>
+
+      <rect x="640" y="996" width="14" height="14" rx="2" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1"/>
+      <text x="658" y="1007" fill="#cbd5e1" font-size="9">外部 / 配置源</text>
+
+      <line x1="760" y1="1003" x2="790" y2="1003" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+      <text x="800" y="1007" fill="#cbd5e1" font-size="9">数据流</text>
+
+      <line x1="870" y1="1003" x2="900" y2="1003" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-emerald)"/>
+      <text x="910" y="1007" fill="#cbd5e1" font-size="9">主循环 / 注入</text>
+
+      <line x1="1000" y1="1003" x2="1030" y2="1003" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrow-rose)"/>
+      <text x="1040" y="1007" fill="#cbd5e1" font-size="9">安全/审计流</text>
+
+      <line x1="1130" y1="1003" x2="1160" y2="1003" stroke="#fb923c" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#arrow-amber)"/>
+      <text x="1170" y="1007" fill="#cbd5e1" font-size="9">Prompt/循环</text>
+
+      <line x1="1260" y1="1003" x2="1290" y2="1003" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrow-violet)"/>
+      <text x="1300" y="1007" fill="#cbd5e1" font-size="9">Config/报告落盘</text>
+
+      <text x="68" y="1022" fill="#64748b" font-size="8">虚线框: 区域边界 (Track / Layer) · 玫瑰虚框: L4 安全围栏整体 · session_id 由 init_tracing 生成, 经 Cli::run 注入各轨与 Harness / Audit / EvidenceStore</text>
+    </svg>
+  </div>
+
+  <div class="summary">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-dot emerald"></div>
+        <h3>主循环 · Harness::run</h3>
+      </div>
+      <ul>
+        <li>每轮: should_compact → provider.chat → 工具分发 → 增量记账</li>
+        <li>SYSTEM_PROMPT 首条 system 注入, first_user_suffix 拼入首条 User</li>
+        <li>三段式零 LLM 压缩; recall tool 按审计 seq 区间回灌被驱逐原文</li>
+        <li>submit_report 收敛, build_report → render_human, degraded_prose 兜底</li>
+        <li>RunOutcome 由 Cli 同时落 ~/.codesleuth/reports/&lt;sid&gt;.md + .json</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="card-dot violet"></div>
+        <h3>向量与索引通道</h3>
+      </div>
+      <ul>
+        <li>EmbedClient 走 Qwen3 兼容 /embeddings, 1024d Matryoshka</li>
+        <li>build: plan_chunks (主块/超大滑窗/兜底) → compose_input → commit_build 单事务落 vectors.db</li>
+        <li>recall: EmbedClient::instruct_query → HNSW k×3 超采 → cosine 复算 → tombstone 过滤</li>
+        <li>format_recall_block 双向消费: VectorSearchTool 工具面 + first_user_suffix 一次性注入</li>
+        <li>HNSW 影子 (M=16 / EF_SEARCH=64 / MIN_HNSW_SIZE=100_000), 否则暴力</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="card-dot rose"></div>
+        <h3>四道安全围栏</h3>
+      </div>
+      <ul>
+        <li>Fence: 词汇预检 + dunce canonicalize 复检, 越界返 CS3003</li>
+        <li>bootlock: flock 跨进程串行化 codegraph 引导与 vector 构建 (acquire_guard)</li>
+        <li>writeguard: snapshot + diff 自证任务起止无可归因变更</li>
+        <li>Audit JSONL: seq 单调追加 + G2 校验, recall 回灌唯一事实锚点</li>
+        <li>EvidenceStore.observe 登记 path → first seq, submit 阶段校验锚点</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="footer">
+    codesleuth · 系统级全局架构图 · v1.1 architecture-diagram · session_id 单点身份贯穿 L1 / L2 / L3 / L4
+  </div>
+</div>
+</body>
+</html>
