@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>System Prompt 注入架构 · codesleuth</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  background: #020617;
+  color: #e2e8f0;
+  padding: 24px;
+  min-height: 100vh;
+}
+.container { max-width: 1200px; margin: 0 auto; }
+header {
+  margin-bottom: 20px;
+  padding: 18px 24px;
+  background: linear-gradient(180deg, #0f172a 0%, #0b1322 100%);
+  border: 1px solid #1e293b;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.pulse-dot {
+  width: 10px; height: 10px;
+  background: #34d399;
+  border-radius: 50%;
+  box-shadow: 0 0 14px #34d399;
+  animation: pulse 2.4s ease-in-out infinite;
+  flex-shrink: 0;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.7); }
+}
+h1 { font-size: 17px; font-weight: 600; color: #f1f5f9; letter-spacing: 0.2px; }
+.subtitle { font-size: 11px; color: #94a3b8; margin-top: 4px; letter-spacing: 0.3px; }
+.diagram-card {
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 20px;
+}
+.diagram-card svg { display: block; width: 100%; height: auto; }
+.cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.card { background: #0f172a; border: 1px solid #1e293b; border-radius: 10px; padding: 14px 16px; }
+.card-header {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 10px; padding-bottom: 8px;
+  border-bottom: 1px solid #1e293b;
+}
+.card-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.card h3 { font-size: 12px; font-weight: 600; color: #f1f5f9; letter-spacing: 0.3px; }
+.card ul { list-style: none; font-size: 10px; color: #cbd5e1; line-height: 1.7; }
+.card li::before { content: "▸ "; color: #475569; margin-right: 2px; }
+footer {
+  text-align: center; font-size: 9px; color: #64748b;
+  padding: 10px; letter-spacing: 0.5px;
+}
+text { font-family: 'JetBrains Mono', monospace; }
+</style>
+</head>
+<body>
+<div class="container" id="report-container">
+<header>
+  <div class="pulse-dot"></div>
+  <div>
+    <h1>System Prompt 注入架构</h1>
+    <p class="subtitle">codesleuth · src/prompt.rs → src/harness.rs → src/llm.rs → LLM Gateway</p>
+  </div>
+</header>
+
+<div class="diagram-card">
+<svg viewBox="0 0 1000 560" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+    </pattern>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
+    </marker>
+    <marker id="arrow-em" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#34d399"/>
+    </marker>
+    <marker id="arrow-am" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#fbbf24"/>
+    </marker>
+    <marker id="arrow-ro" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#fb7185"/>
+    </marker>
+    <marker id="arrow-vi" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#a78bfa"/>
+    </marker>
+  </defs>
+
+  <rect width="1000" height="560" fill="#020617"/>
+  <rect width="1000" height="560" fill="url(#grid)"/>
+
+  <line x1="500" y1="58" x2="500" y2="83" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="508" y="74" fill="#94a3b8" font-size="8">约束</text>
+
+  <line x1="222" y1="135" x2="278" y2="135" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-em)"/>
+  <text x="225" y="128" fill="#34d399" font-size="8">SYSTEM_PROMPT → m[0]</text>
+
+  <line x1="598" y1="140" x2="532" y2="140" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-em)"/>
+  <text x="535" y="133" fill="#34d399" font-size="8">Harness::new + first_suffix</text>
+
+  <path d="M 532 170 L 826 130" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-em)"/>
+  <text x="600" y="148" fill="#34d399" font-size="8">self.provider.chat(&amp;req)</text>
+
+  <line x1="900" y1="183" x2="900" y2="226" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#arrow-am)"/>
+  <text x="908" y="208" fill="#fbbf24" font-size="8">HTTP POST</text>
+
+  <line x1="405" y1="247" x2="405" y2="306" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrow-vi)"/>
+  <text x="412" y="282" fill="#a78bfa" font-size="8">audit.record("llm")</text>
+
+  <path d="M 130 310 Q 200 275 280 245" fill="none" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#arrow-ro)"/>
+  <text x="148" y="280" fill="#fb7185" font-size="8">verifies</text>
+
+  <rect x="20" y="70" width="780" height="200" rx="12" fill="none" stroke="#fbbf24" stroke-width="1" stroke-dasharray="8,4" opacity="0.4"/>
+  <rect x="820" y="70" width="160" height="240" rx="12" fill="none" stroke="#fbbf24" stroke-width="1" stroke-dasharray="8,4" opacity="0.4"/>
+
+  <text x="30" y="84" fill="#fbbf24" font-size="9" font-weight="600" letter-spacing="0.5" opacity="0.7">HARNESS RUNTIME · D005 只读身份不可漂移</text>
+  <text x="830" y="84" fill="#fbbf24" font-size="9" font-weight="600" letter-spacing="0.5" opacity="0.7">EXTERNAL</text>
+
+  <rect x="400" y="18" width="200" height="40" rx="6" fill="#0f172a"/>
+  <rect x="400" y="18" width="200" height="40" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="500" y="36" fill="white" font-size="11" font-weight="600" text-anchor="middle">D005 / D006</text>
+  <text x="500" y="50" fill="#94a3b8" font-size="8" text-anchor="middle">prompt-layering · layered protocol</text>
+
+  <rect x="40" y="100" width="180" height="70" rx="6" fill="#0f172a"/>
+  <rect x="40" y="100" width="180" height="70" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="130" y="122" fill="white" font-size="12" font-weight="600" text-anchor="middle">src/prompt.rs</text>
+  <text x="130" y="142" fill="#94a3b8" font-size="8" text-anchor="middle">SYSTEM_PROMPT · 4-30</text>
+  <text x="130" y="158" fill="#94a3b8" font-size="8" text-anchor="middle">anchor test · 37-56</text>
+
+  <rect x="280" y="85" width="250" height="160" rx="6" fill="#0f172a"/>
+  <rect x="280" y="85" width="250" height="160" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="405" y="108" fill="white" font-size="12" font-weight="600" text-anchor="middle">src/harness.rs</text>
+  <text x="405" y="128" fill="#94a3b8" font-size="8" text-anchor="middle">Harness::run · 74-88</text>
+  <text x="405" y="143" fill="#94a3b8" font-size="8" text-anchor="middle">messages[0] = SYSTEM (role=system)</text>
+  <text x="405" y="158" fill="#94a3b8" font-size="8" text-anchor="middle">messages[1] = task + first_suffix</text>
+  <text x="405" y="173" fill="#94a3b8" font-size="8" text-anchor="middle">主循环 + 无空转熔断 · 126-399</text>
+  <text x="405" y="188" fill="#94a3b8" font-size="8" text-anchor="middle">audit.record · 153-165</text>
+  <text x="405" y="203" fill="#94a3b8" font-size="8" text-anchor="middle">build_report · 460-598</text>
+  <text x="405" y="218" fill="#94a3b8" font-size="8" text-anchor="middle">evidence.cite_seq · 504-509</text>
+
+  <rect x="600" y="100" width="180" height="80" rx="6" fill="#0f172a"/>
+  <rect x="600" y="100" width="180" height="80" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="690" y="122" fill="white" font-size="12" font-weight="600" text-anchor="middle">src/cli.rs</text>
+  <text x="690" y="142" fill="#94a3b8" font-size="8" text-anchor="middle">run_task_inner · 359-371</text>
+  <text x="690" y="158" fill="#94a3b8" font-size="8" text-anchor="middle">build first_user_suffix</text>
+  <text x="690" y="173" fill="#94a3b8" font-size="8" text-anchor="middle">--vector / --repo-map 路径</text>
+
+  <rect x="830" y="88" width="140" height="95" rx="6" fill="#0f172a"/>
+  <rect x="830" y="88" width="140" height="95" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="900" y="110" fill="white" font-size="11" font-weight="600" text-anchor="middle">src/llm.rs</text>
+  <text x="900" y="128" fill="#94a3b8" font-size="8" text-anchor="middle">OpenAiProvider</text>
+  <text x="900" y="143" fill="#94a3b8" font-size="8" text-anchor="middle">to_request_message</text>
+  <text x="900" y="158" fill="#94a3b8" font-size="8" text-anchor="middle">149-194</text>
+  <text x="900" y="173" fill="#94a3b8" font-size="7" text-anchor="middle">role 严格隔离</text>
+
+  <rect x="830" y="230" width="140" height="70" rx="6" fill="#0f172a"/>
+  <rect x="830" y="230" width="140" height="70" rx="6" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+  <text x="900" y="252" fill="white" font-size="11" font-weight="600" text-anchor="middle">LLM Gateway</text>
+  <text x="900" y="270" fill="#94a3b8" font-size="8" text-anchor="middle">OpenAI 兼容</text>
+  <text x="900" y="284" fill="#94a3b8" font-size="8" text-anchor="middle">POST /chat</text>
+
+  <rect x="280" y="310" width="250" height="70" rx="6" fill="#0f172a"/>
+  <rect x="280" y="310" width="250" height="70" rx="6" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+  <text x="405" y="332" fill="white" font-size="12" font-weight="600" text-anchor="middle">Audit Log</text>
+  <text x="405" y="350" fill="#94a3b8" font-size="8" text-anchor="middle">record llm / turn / tool_call</text>
+  <text x="405" y="364" fill="#94a3b8" font-size="8" text-anchor="middle">src/harness.rs:153-165</text>
+
+  <rect x="40" y="310" width="180" height="80" rx="6" fill="#0f172a"/>
+  <rect x="40" y="310" width="180" height="80" rx="6" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,4"/>
+  <text x="130" y="332" fill="white" font-size="12" font-weight="600" text-anchor="middle">tests/adversarial.rs</text>
+  <text x="130" y="350" fill="#94a3b8" font-size="8" text-anchor="middle">READ_ONLY_TOOLS · 19-29</text>
+  <text x="130" y="364" fill="#94a3b8" font-size="8" text-anchor="middle">assert 只读边界不被击穿</text>
+  <text x="130" y="378" fill="#94a3b8" font-size="8" text-anchor="middle">186-202</text>
+
+  <g transform="translate(40, 430)">
+    <text x="0" y="0" fill="#94a3b8" font-size="9" font-weight="600" letter-spacing="0.5">LEGEND</text>
+    <rect x="0" y="12" width="12" height="12" rx="2" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+    <text x="18" y="22" fill="#cbd5e1" font-size="9">codesleuth 源码</text>
+    <rect x="160" y="12" width="12" height="12" rx="2" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+    <text x="178" y="22" fill="#cbd5e1" font-size="9">外部云服务</text>
+    <rect x="300" y="12" width="12" height="12" rx="2" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+    <text x="318" y="22" fill="#cbd5e1" font-size="9">结构化数据</text>
+    <rect x="440" y="12" width="12" height="12" rx="2" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,4"/>
+    <text x="458" y="22" fill="#cbd5e1" font-size="9">对抗测试</text>
+    <rect x="580" y="12" width="12" height="12" rx="2" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+    <text x="598" y="22" fill="#cbd5e1" font-size="9">设计文档</text>
+    <rect x="720" y="12" width="12" height="12" rx="2" fill="none" stroke="#fbbf24" stroke-width="1" stroke-dasharray="8,4" opacity="0.6"/>
+    <text x="738" y="22" fill="#cbd5e1" font-size="9">D005 区域</text>
+    <line x1="0" y1="50" x2="30" y2="50" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-em)"/>
+    <text x="38" y="54" fill="#cbd5e1" font-size="9">数据流</text>
+    <line x1="140" y1="50" x2="170" y2="50" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#arrow-ro)"/>
+    <text x="178" y="54" fill="#cbd5e1" font-size="9">校验流</text>
+    <line x1="280" y1="50" x2="310" y2="50" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#arrow-am)"/>
+    <text x="318" y="54" fill="#cbd5e1" font-size="9">外部调用</text>
+  </g>
+</svg>
+</div>
+
+<div class="cards">
+  <div class="card">
+    <div class="card-header">
+      <div class="card-dot" style="background:#34d399"></div>
+      <h3>System / User 分层</h3>
+    </div>
+    <ul>
+      <li>SYSTEM_PROMPT → messages[0].role=system</li>
+      <li>task + first_user_suffix → messages[1].role=user</li>
+      <li>src/harness.rs:76-88 物理实现分层</li>
+      <li>to_request_message 149-194 锁死 role 标签</li>
+    </ul>
+  </div>
+  <div class="card">
+    <div class="card-header">
+      <div class="card-dot" style="background:#a78bfa"></div>
+      <h3>契约机械化兑现</h3>
+    </div>
+    <ul>
+      <li>锚点测试 prompt_contains_contract_anchors · 37-56</li>
+      <li>无空转熔断 · 300-313 / 386-399</li>
+      <li>build_report 证据 cite 强制 · 504-509</li>
+      <li>READ_ONLY_TOOLS 工具白名单 · 19-29</li>
+    </ul>
+  </div>
+  <div class="card">
+    <div class="card-header">
+      <div class="card-dot" style="background:#fb7185"></div>
+      <h3>关键决策依据</h3>
+    </div>
+    <ul>
+      <li>D005 prompt-layering · 产品资产 vs 运行时</li>
+      <li>D006 all-tools-layered-protocol · 层进检索</li>
+      <li>D011 工具面物理无写能力</li>
+      <li>D013 context 压缩阈值</li>
+    </ul>
+  </div>
+</div>
+
+<footer>codesleuth · SYSTEM_PROMPT 注入链路 · src/prompt.rs · src/harness.rs · src/llm.rs · 2026-10-07</footer>
+
+</div>
+</body>
+</html>

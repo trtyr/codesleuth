@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Vector Chunking Architecture · codesleuth</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    background: #020617;
+    color: #e2e8f0;
+    padding: 24px;
+    min-height: 100vh;
+  }
+  .container { max-width: 1340px; margin: 0 auto; }
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 16px;
+    padding: 4px 8px;
+  }
+  .header-dot {
+    width: 10px; height: 10px;
+    background: #34d399;
+    border-radius: 50%;
+    box-shadow: 0 0 0 0 rgba(52,211,153,0.6);
+    animation: pulse 2.2s infinite;
+    flex-shrink: 0;
+  }
+  @keyframes pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(52,211,153,0.6); }
+    70%  { box-shadow: 0 0 0 12px rgba(52,211,153,0); }
+    100% { box-shadow: 0 0 0 0 rgba(52,211,153,0); }
+  }
+  .header h1 {
+    font-size: 18px; font-weight: 600; color: #f1f5f9; letter-spacing: -0.3px;
+  }
+  .header .subtitle { font-size: 11px; color: #64748b; margin-left: auto; }
+  .diagram-card {
+    background: #0f172a; border: 1px solid #1e293b;
+    border-radius: 12px; padding: 14px; margin-bottom: 16px;
+  }
+  svg { display: block; width: 100%; height: auto; }
+  .summary-cards {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 12px; margin-bottom: 12px;
+  }
+  .card {
+    background: #0f172a; border: 1px solid #1e293b;
+    border-radius: 8px; padding: 14px 16px;
+  }
+  .card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .card-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .card h3 { font-size: 12px; font-weight: 600; color: #f1f5f9; }
+  .card ul { list-style: none; font-size: 10px; color: #94a3b8; line-height: 1.7; }
+  .card li::before { content: "› "; color: #475569; }
+  .footer {
+    text-align: center; font-size: 9px; color: #475569;
+    padding: 10px 0 0; letter-spacing: 0.5px;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <div class="header-dot"></div>
+    <h1>Vector Chunking Architecture</h1>
+    <div class="subtitle">codesleuth · src/vector/* · chunk → embed → store → recall</div>
+  </div>
+
+  <div class="diagram-card">
+    <svg viewBox="0 0 1280 820" xmlns="http://www.w3.org/2000/svg" font-family="'JetBrains Mono', monospace">
+      <defs>
+        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+          <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+        </pattern>
+        <marker id="ah" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
+        </marker>
+        <marker id="ah-em" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#34d399"/>
+        </marker>
+        <marker id="ah-vi" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#a78bfa"/>
+        </marker>
+        <marker id="ah-cy" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#22d3ee"/>
+        </marker>
+      </defs>
+
+      <rect width="1280" height="820" fill="#0f172a"/>
+      <rect width="1280" height="820" fill="url(#grid)"/>
+
+      <!-- ===== ARROWS (z-order behind boxes) ===== -->
+
+      <!-- CLI triggers -> build_vector_index -->
+      <path d="M 330,215 L 405,255" stroke="#22d3ee" stroke-width="1.5" fill="none" marker-end="url(#ah-cy)"/>
+      <text x="335" y="240" fill="#22d3ee" font-size="7">trigger</text>
+
+      <path d="M 510,215 L 500,255" stroke="#22d3ee" stroke-width="1.5" fill="none" marker-end="url(#ah-cy)"/>
+      <text x="492" y="240" fill="#22d3ee" font-size="7">trigger</text>
+
+      <!-- VectorConfig -> build_vector_index -->
+      <path d="M 190,375 C 280,330 380,275 425,255" stroke="#94a3b8" stroke-width="1.5" fill="none" marker-end="url(#ah)"/>
+      <text x="240" y="305" fill="#94a3b8" font-size="7" transform="rotate(-18 240 305)">config</text>
+
+      <!-- codegraph.db -> symbols_from_codegraph -->
+      <path d="M 190,235 C 210,330 220,420 250,470" stroke="#a78bfa" stroke-width="1.5" fill="none" marker-end="url(#ah-vi)"/>
+      <text x="205" y="370" fill="#a78bfa" font-size="7" transform="rotate(82 205 370)">SELECT nodes</text>
+
+      <!-- codegraph.db -> relations_for_symbol -->
+      <path d="M 190,258 C 320,310 430,400 470,470" stroke="#a78bfa" stroke-width="1.5" fill="none" marker-end="url(#ah-vi)"/>
+      <text x="290" y="345" fill="#a78bfa" font-size="7" transform="rotate(20 290 345)">JOIN edges</text>
+
+      <!-- build_vector_index -> plan_chunks -->
+      <path d="M 420,325 L 335,370" stroke="#34d399" stroke-width="1.8" fill="none" marker-end="url(#ah-em)"/>
+      <text x="345" y="352" fill="#34d399" font-size="8">chunk</text>
+
+      <!-- build_vector_index -> compose_input -->
+      <path d="M 580,325 L 700,370" stroke="#34d399" stroke-width="1.5" fill="none" marker-end="url(#ah-em)"/>
+      <text x="620" y="350" fill="#34d399" font-size="8">compose</text>
+
+      <!-- build_vector_index -> EmbedClient -->
+      <path d="M 600,325 C 660,400 700,440 715,470" stroke="#34d399" stroke-width="1.5" fill="none" marker-end="url(#ah-em)"/>
+      <text x="665" y="415" fill="#34d399" font-size="8">embed</text>
+
+      <!-- plan_chunks -> sub_window_chunks -->
+      <path d="M 410,397 L 440,397" stroke="#34d399" stroke-width="1.5" fill="none" marker-end="url(#ah-em)"/>
+      <text x="412" y="392" fill="#34d399" font-size="7">split</text>
+
+      <!-- plan_chunks -> symbols_from_codegraph -->
+      <path d="M 305,425 L 320,470" stroke="#34d399" stroke-width="1.5" fill="none" marker-end="url(#ah-em)"/>
+      <text x="278" y="453" fill="#34d399" font-size="7">read</text>
+
+      <!-- EmbedClient -> LLM Embed Endpoint -->
+      <path d="M 650,497 C 400,520 250,540 190,548" stroke="#94a3b8" stroke-width="1.5" fill="none" stroke-dasharray="4,3" marker-end="url(#ah)"/>
+      <text x="380" y="525" fill="#94a3b8" font-size="8">POST /embed</text>
+
+      <!-- EmbedClient -> VectorStore -->
+      <path d="M 770,497 C 820,440 860,370 890,325" stroke="#34d399" stroke-width="1.5" fill="none" marker-end="url(#ah-em)"/>
+      <text x="840" y="430" fill="#34d399" font-size="8">vectors</text>
+
+      <!-- VectorStore -> vectors.db -->
+      <path d="M 890,325 L 890,380" stroke="#a78bfa" stroke-width="1.5" fill="none" marker-end="url(#ah-vi)"/>
+      <text x="900" y="358" fill="#a78bfa" font-size="7">commit</text>
+
+      <!-- vectors.db -> RecallEngine -->
+      <path d="M 960,405 C 1000,360 1015,260 1050,240" stroke="#a78bfa" stroke-width="1.5" fill="none" marker-end="url(#ah-vi)"/>
+      <text x="985" y="320" fill="#a78bfa" font-size="8">load rows</text>
+
+      <!-- RecallEngine -> format_recall_block -->
+      <path d="M 1125,240 L 1125,300" stroke="#22d3ee" stroke-width="1.5" fill="none" marker-end="url(#ah-cy)"/>
+      <text x="1135" y="280" fill="#22d3ee" font-size="7">render</text>
+
+      <!-- RecallEngine hits -> relations_for_symbol (data feed) -->
+      <path d="M 1020,200 C 880,230 720,300 620,470" stroke="#22d3ee" stroke-width="1.2" fill="none" stroke-dasharray="3,3" marker-end="url(#ah-cy)"/>
+      <text x="730" y="350" fill="#22d3ee" font-size="7">hits → lookup</text>
+
+      <!-- relations_for_symbol -> repomap::build_task_map -->
+      <path d="M 630,497 C 800,500 950,475 1050,455" stroke="#22d3ee" stroke-width="1.5" fill="none" stroke-dasharray="4,3" marker-end="url(#ah-cy)"/>
+      <text x="800" y="478" fill="#22d3ee" font-size="8">caller/callee</text>
+
+      <!-- ===== REGION BOUNDARIES ===== -->
+      <rect x="220" y="120" width="560" height="580" rx="12" fill="none" stroke="#fbbf24" stroke-width="1.2" stroke-dasharray="8,4"/>
+      <text x="240" y="142" fill="#fbbf24" font-size="9" font-weight="600">build pipeline · src/vector/{chunk,build,compose,embed,store}.rs</text>
+
+      <rect x="990" y="120" width="270" height="580" rx="12" fill="none" stroke="#fbbf24" stroke-width="1.2" stroke-dasharray="8,4"/>
+      <text x="1010" y="142" fill="#fbbf24" font-size="9" font-weight="600">recall &amp; consumption</text>
+
+      <!-- ===== COMPONENT BOXES ===== -->
+
+      <!-- codegraph.db -->
+      <rect x="30" y="200" width="160" height="60" rx="6" fill="#0f172a"/>
+      <rect x="30" y="200" width="160" height="60" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="110" y="225" fill="white" font-size="11" font-weight="600" text-anchor="middle">codegraph.db</text>
+      <text x="110" y="242" fill="#94a3b8" font-size="8" text-anchor="middle">nodes + edges (SQLite)</text>
+
+      <!-- VectorConfig -->
+      <rect x="30" y="350" width="160" height="60" rx="6" fill="#0f172a"/>
+      <rect x="30" y="350" width="160" height="60" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="110" y="375" fill="white" font-size="11" font-weight="600" text-anchor="middle">VectorConfig</text>
+      <text x="110" y="392" fill="#94a3b8" font-size="8" text-anchor="middle">src/config.rs:93-104</text>
+      <text x="110" y="404" fill="#64748b" font-size="7" text-anchor="middle">model/dims/mode/budget</text>
+
+      <!-- LLM Embed Endpoint -->
+      <rect x="30" y="520" width="160" height="60" rx="6" fill="#0f172a"/>
+      <rect x="30" y="520" width="160" height="60" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="110" y="545" fill="white" font-size="11" font-weight="600" text-anchor="middle">LLM Embed</text>
+      <text x="110" y="562" fill="#94a3b8" font-size="8" text-anchor="middle">external endpoint</text>
+
+      <!-- run_index_vector -->
+      <rect x="250" y="160" width="160" height="55" rx="6" fill="#0f172a"/>
+      <rect x="250" y="160" width="160" height="55" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="330" y="183" fill="white" font-size="11" font-weight="600" text-anchor="middle">run_index_vector</text>
+      <text x="330" y="200" fill="#94a3b8" font-size="8" text-anchor="middle">cli.rs:113-180</text>
+
+      <!-- setup_vector_layer -->
+      <rect x="430" y="160" width="160" height="55" rx="6" fill="#0f172a"/>
+      <rect x="430" y="160" width="160" height="55" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="510" y="183" fill="white" font-size="11" font-weight="600" text-anchor="middle">setup_vector_layer</text>
+      <text x="510" y="200" fill="#94a3b8" font-size="8" text-anchor="middle">cli.rs:540-589</text>
+
+      <!-- build_vector_index -->
+      <rect x="350" y="255" width="260" height="70" rx="6" fill="#0f172a"/>
+      <rect x="350" y="255" width="260" height="70" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="480" y="281" fill="white" font-size="12" font-weight="600" text-anchor="middle">build_vector_index</text>
+      <text x="480" y="299" fill="#94a3b8" font-size="9" text-anchor="middle">build.rs:25 · fingerprint → plan → embed → commit</text>
+      <text x="480" y="314" fill="#64748b" font-size="8" text-anchor="middle">model/dim/mode 变 → 全量重建</text>
+
+      <!-- plan_chunks -->
+      <rect x="250" y="370" width="160" height="55" rx="6" fill="#0f172a"/>
+      <rect x="250" y="370" width="160" height="55" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="330" y="393" fill="white" font-size="11" font-weight="600" text-anchor="middle">plan_chunks</text>
+      <text x="330" y="410" fill="#94a3b8" font-size="8" text-anchor="middle">chunk.rs:258-474</text>
+
+      <!-- sub_window_chunks -->
+      <rect x="440" y="370" width="170" height="55" rx="6" fill="#0f172a"/>
+      <rect x="440" y="370" width="170" height="55" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="525" y="393" fill="white" font-size="11" font-weight="600" text-anchor="middle">sub_window_chunks</text>
+      <text x="525" y="410" fill="#94a3b8" font-size="8" text-anchor="middle">chunk.rs:177-244 · 100/15</text>
+
+      <!-- compose_input -->
+      <rect x="640" y="370" width="120" height="55" rx="6" fill="#0f172a"/>
+      <rect x="640" y="370" width="120" height="55" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="700" y="393" fill="white" font-size="11" font-weight="600" text-anchor="middle">compose_input</text>
+      <text x="700" y="410" fill="#94a3b8" font-size="8" text-anchor="middle">compose.rs:14-51</text>
+
+      <!-- symbols_from_codegraph -->
+      <rect x="240" y="470" width="200" height="55" rx="6" fill="#0f172a"/>
+      <rect x="240" y="470" width="200" height="55" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="340" y="493" fill="white" font-size="11" font-weight="600" text-anchor="middle">symbols_from_codegraph</text>
+      <text x="340" y="510" fill="#94a3b8" font-size="8" text-anchor="middle">chunk.rs:84-134 · KEPT_KINDS</text>
+
+      <!-- relations_for_symbol -->
+      <rect x="460" y="470" width="170" height="55" rx="6" fill="#0f172a"/>
+      <rect x="460" y="470" width="170" height="55" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="545" y="493" fill="white" font-size="11" font-weight="600" text-anchor="middle">relations_for_symbol</text>
+      <text x="545" y="510" fill="#94a3b8" font-size="8" text-anchor="middle">chunk.rs:137-166 · cap 8</text>
+
+      <!-- EmbedClient -->
+      <rect x="650" y="470" width="120" height="55" rx="6" fill="#0f172a"/>
+      <rect x="650" y="470" width="120" height="55" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="710" y="493" fill="white" font-size="11" font-weight="600" text-anchor="middle">EmbedClient</text>
+      <text x="710" y="510" fill="#94a3b8" font-size="8" text-anchor="middle">embed.rs:42-220</text>
+
+      <!-- fallback annotation -->
+      <rect x="250" y="555" width="200" height="42" rx="4" fill="#0f172a" stroke="#94a3b8" stroke-width="1" stroke-dasharray="3,3"/>
+      <text x="350" y="573" fill="#cbd5e1" font-size="9" text-anchor="middle">fallback walk · MAX_CHUNK=6000</text>
+      <text x="350" y="587" fill="#94a3b8" font-size="7" text-anchor="middle">FALLBACK_LINES=100 · OVERLAP=20</text>
+
+      <!-- KEPT_KINDS annotation -->
+      <rect x="470" y="555" width="220" height="42" rx="4" fill="#0f172a" stroke="#94a3b8" stroke-width="1" stroke-dasharray="3,3"/>
+      <text x="580" y="573" fill="#cbd5e1" font-size="9" text-anchor="middle">KEPT_KINDS filter</text>
+      <text x="580" y="587" fill="#94a3b8" font-size="7" text-anchor="middle">function/method/struct/class/interface/impl/trait</text>
+
+      <!-- hash dedup annotation -->
+      <rect x="640" y="640" width="140" height="40" rx="4" fill="#0f172a" stroke="#94a3b8" stroke-width="1" stroke-dasharray="3,3"/>
+      <text x="710" y="657" fill="#cbd5e1" font-size="8" text-anchor="middle">text_hash 增量复用</text>
+      <text x="710" y="671" fill="#94a3b8" font-size="7" text-anchor="middle">batch=64 · conc=4</text>
+
+      <!-- VectorStore -->
+      <rect x="820" y="255" width="140" height="70" rx="6" fill="#0f172a"/>
+      <rect x="820" y="255" width="140" height="70" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="890" y="281" fill="white" font-size="11" font-weight="600" text-anchor="middle">VectorStore</text>
+      <text x="890" y="297" fill="#94a3b8" font-size="8" text-anchor="middle">store.rs · commit_build</text>
+      <text x="890" y="313" fill="#64748b" font-size="7" text-anchor="middle">unchecked_transaction</text>
+
+      <!-- vectors.db -->
+      <rect x="820" y="380" width="140" height="60" rx="6" fill="#0f172a"/>
+      <rect x="820" y="380" width="140" height="60" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="890" y="405" fill="white" font-size="11" font-weight="600" text-anchor="middle">vectors.db</text>
+      <text x="890" y="422" fill="#94a3b8" font-size="8" text-anchor="middle">chunks + idx_key</text>
+
+      <!-- chunk_key annotation -->
+      <rect x="820" y="465" width="140" height="50" rx="4" fill="#0f172a" stroke="#94a3b8" stroke-width="1" stroke-dasharray="3,3"/>
+      <text x="890" y="482" fill="#cbd5e1" font-size="9" text-anchor="middle">chunk_key</text>
+      <text x="890" y="496" fill="#94a3b8" font-size="7" text-anchor="middle">file ⎉ symbol ⎉ line_start</text>
+      <text x="890" y="508" fill="#64748b" font-size="7" text-anchor="middle">store.rs:14-16</text>
+
+      <!-- GC annotation -->
+      <rect x="820" y="530" width="140" height="50" rx="4" fill="#0f172a" stroke="#94a3b8" stroke-width="1" stroke-dasharray="3,3"/>
+      <text x="890" y="547" fill="#cbd5e1" font-size="9" text-anchor="middle">GC + meta</text>
+      <text x="890" y="561" fill="#94a3b8" font-size="7" text-anchor="middle">model/dim/mode 翻新</text>
+      <text x="890" y="573" fill="#64748b" font-size="7" text-anchor="middle">store.rs:170-232</text>
+
+      <!-- path annotation -->
+      <rect x="820" y="595" width="140" height="40" rx="4" fill="#0f172a" stroke="#94a3b8" stroke-width="1" stroke-dasharray="3,3"/>
+      <text x="890" y="613" fill="#cbd5e1" font-size="8" text-anchor="middle">.codesleuth/indexes/</text>
+      <text x="890" y="627" fill="#94a3b8" font-size="7" text-anchor="middle">&lt;fingerprint&gt;/vectors.db</text>
+
+      <!-- RecallEngine -->
+      <rect x="1020" y="160" width="210" height="80" rx="6" fill="#0f172a"/>
+      <rect x="1020" y="160" width="210" height="80" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="1125" y="186" fill="white" font-size="12" font-weight="600" text-anchor="middle">RecallEngine</text>
+      <text x="1125" y="203" fill="#94a3b8" font-size="9" text-anchor="middle">recall.rs:25-139</text>
+      <text x="1125" y="220" fill="#64748b" font-size="8" text-anchor="middle">brute ≤100k · HNSW &gt;100k</text>
+      <text x="1125" y="233" fill="#64748b" font-size="8" text-anchor="middle">tombstone &gt;20% → compact</text>
+
+      <!-- format_recall_block -->
+      <rect x="1020" y="300" width="210" height="60" rx="6" fill="#0f172a"/>
+      <rect x="1020" y="300" width="210" height="60" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="1125" y="324" fill="white" font-size="11" font-weight="600" text-anchor="middle">format_recall_block</text>
+      <text x="1125" y="341" fill="#94a3b8" font-size="8" text-anchor="middle">recall.rs:142-159</text>
+      <text x="1125" y="354" fill="#64748b" font-size="7" text-anchor="middle">起步线索 · K≤10 · 含免责</text>
+
+      <!-- repomap::build_task_map -->
+      <rect x="1020" y="420" width="210" height="60" rx="6" fill="#0f172a"/>
+      <rect x="1020" y="420" width="210" height="60" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="1125" y="444" fill="white" font-size="11" font-weight="600" text-anchor="middle">repomap::build_task_map</text>
+      <text x="1125" y="461" fill="#94a3b8" font-size="8" text-anchor="middle">cli.rs:607-654</text>
+      <text x="1125" y="474" fill="#64748b" font-size="7" text-anchor="middle">task nav graph seed</text>
+
+      <!-- CLI stdout -->
+      <rect x="1020" y="540" width="210" height="60" rx="6" fill="#0f172a"/>
+      <rect x="1020" y="540" width="210" height="60" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="1125" y="564" fill="white" font-size="11" font-weight="600" text-anchor="middle">CLI stdout / run_task</text>
+      <text x="1125" y="581" fill="#94a3b8" font-size="8" text-anchor="middle">bootlock 串行 · audit degraded</text>
+
+      <!-- bootlock note -->
+      <rect x="1020" y="620" width="210" height="40" rx="4" fill="#0f172a" stroke="#94a3b8" stroke-width="1" stroke-dasharray="3,3"/>
+      <text x="1125" y="638" fill="#cbd5e1" font-size="9" text-anchor="middle">build 失败 → 非致命</text>
+      <text x="1125" y="652" fill="#94a3b8" font-size="7" text-anchor="middle">degraded audit row</text>
+
+      <!-- ===== LEGEND (outside boundaries) ===== -->
+      <rect x="20" y="720" width="1240" height="80" rx="6" fill="#0f172a" stroke="#1e293b" stroke-width="1"/>
+      <text x="40" y="740" fill="#cbd5e1" font-size="9" font-weight="600">legend</text>
+
+      <rect x="40" y="752" width="14" height="14" rx="3" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="60" y="763" fill="#94a3b8" font-size="9">Frontend / CLI</text>
+
+      <rect x="170" y="752" width="14" height="14" rx="3" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="190" y="763" fill="#94a3b8" font-size="9">Backend service</text>
+
+      <rect x="320" y="752" width="14" height="14" rx="3" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="340" y="763" fill="#94a3b8" font-size="9">Database / store</text>
+
+      <rect x="480" y="752" width="14" height="14" rx="3" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="500" y="763" fill="#94a3b8" font-size="9">External / config</text>
+
+      <rect x="640" y="752" width="14" height="14" rx="3" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="4,2"/>
+      <text x="660" y="763" fill="#94a3b8" font-size="9">Region boundary</text>
+
+      <line x1="800" y1="759" x2="822" y2="759" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah-em)"/>
+      <text x="830" y="763" fill="#94a3b8" font-size="9">internal call</text>
+
+      <line x1="935" y1="759" x2="957" y2="759" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah-vi)"/>
+      <text x="965" y="763" fill="#94a3b8" font-size="9">DB I/O</text>
+
+      <line x1="1045" y1="759" x2="1067" y2="759" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="3,3" marker-end="url(#ah)"/>
+      <text x="1075" y="763" fill="#94a3b8" font-size="9">external call</text>
+
+      <line x1="1190" y1="759" x2="1212" y2="759" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah-cy)"/>
+      <text x="1220" y="763" fill="#94a3b8" font-size="9">consumer</text>
+    </svg>
+  </div>
+
+  <div class="summary-cards">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-dot" style="background:#34d399"></div>
+        <h3>Three-Layer Chunking</h3>
+      </div>
+      <ul>
+        <li>Layer 1: KEPT_KINDS symbol main block · docstring 上提 (chunk.rs:280-340)</li>
+        <li>Layer 2: sub_window_chunks 滑窗 100/15 行 (chunk.rs:177-244)</li>
+        <li>Layer 3: covered gaps leftover + 磁盘 walk 兜底 (chunk.rs:407-468)</li>
+        <li>最终按 (file, line_start, symbol) 排序输出</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-dot" style="background:#a78bfa"></div>
+        <h3>Storage &amp; Identity</h3>
+      </div>
+      <ul>
+        <li>chunk_key = file ⎉ symbol ⎉ line_start (store.rs:14-16)</li>
+        <li>chunks 表 + 唯一索引 idx_chunks_key (store.rs:69)</li>
+        <li>commit_build: GC + upsert + meta in unchecked_transaction (store.rs:170-232)</li>
+        <li>fingerprint 变 (model/dim/mode) 即全量重建 (build.rs:25-92)</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-dot" style="background:#22d3ee"></div>
+        <h3>Recall &amp; Task Seed</h3>
+      </div>
+      <ul>
+        <li>RecallEngine: 暴力 ≤100k · HNSW &gt;100k · tombstone &gt;20% → compact (recall.rs:25-139)</li>
+        <li>format_recall_block 起步线索 + 相似度 + 免责 (recall.rs:142-159)</li>
+        <li>hit 喂 caller/callee 给 repomap::build_task_map (cli.rs:607-654)</li>
+        <li>build 失败非致命 · bootlock 串行 · degraded audit row</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="footer">codesleuth · src/vector/{chunk,build,compose,embed,store,recall}.rs · architecture diagram · 2026-10-07</div>
+</div>
+</body>
+</html>

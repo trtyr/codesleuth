@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>向量召回引擎 · 架构图</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #020617; color: #e2e8f0; font-family: 'JetBrains Mono', monospace; min-height: 100vh; padding: 24px; }
+  .container { max-width: 1240px; margin: 0 auto; }
+  .header { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; padding: 0 8px; }
+  .header-dot { width: 10px; height: 10px; border-radius: 50%; background: #34d399; box-shadow: 0 0 12px #34d399; animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+  .header h1 { font-size: 18px; font-weight: 600; color: #f1f5f9; letter-spacing: 0.2px; }
+  .header .sub { font-size: 11px; color: #94a3b8; margin-left: auto; }
+  .svg-card { background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; padding: 16px; }
+  svg { display: block; width: 100%; height: auto; }
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 16px; padding: 14px 18px; background: #0f172a; border: 1px solid #1e293b; border-radius: 10px; font-size: 10px; }
+  .legend-item { display: flex; align-items: center; gap: 8px; color: #cbd5e1; }
+  .legend-swatch { width: 14px; height: 14px; border-radius: 3px; border: 1.5px solid; }
+  .footer { margin-top: 14px; font-size: 9px; color: #64748b; text-align: right; padding: 0 8px; }
+  .footer .badge { color: #34d399; }
+</style>
+</head>
+<body>
+<div class="container" id="report-container">
+  <div class="header">
+    <div class="header-dot"></div>
+    <h1>向量召回引擎 · Vector Recall Engine</h1>
+    <div class="sub">src/vector/recall.rs · codesleuth · 2026-10-07</div>
+  </div>
+  <div class="svg-card">
+    <svg viewBox="0 0 1200 840" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+          <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+        </pattern>
+        <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
+        </marker>
+        <marker id="arrowhead-rose" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#fb7185"/>
+        </marker>
+        <marker id="arrowhead-emerald" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#34d399"/>
+        </marker>
+      </defs>
+      <rect width="1200" height="840" fill="url(#grid)"/>
+
+      <!-- Region: codesleuth repo -->
+      <rect x="20" y="20" width="1160" height="660" rx="12" fill="none" stroke="#fbbf24" stroke-width="1" stroke-dasharray="8,4" opacity="0.5"/>
+      <text x="40" y="42" fill="#fbbf24" font-size="10" font-weight="500">codesleuth · Rust workspace · .codesleuth / .codegraph 享 writeguard 豁免</text>
+
+      <!-- ====================== ARROWS (drawn first, behind components) ====================== -->
+
+      <!-- VectorConfig → run_index_vector (vertical) -->
+      <line x1="160" y1="110" x2="160" y2="148" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+
+      <!-- --vector flag → build_vector_index (vertical) -->
+      <line x1="360" y1="110" x2="390" y2="148" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+
+      <!-- --vector flag → setup_vector_layer (long enable) -->
+      <path d="M 430 80 Q 480 250 660 448" fill="none" stroke="#64748b" stroke-width="1.1" stroke-dasharray="3,3" marker-end="url(#arrowhead)"/>
+      <text x="540" y="240" fill="#94a3b8" font-size="8">--vector enables</text>
+
+      <!-- Bootlock → run_index_vector (rose dashed) -->
+      <line x1="460" y1="80" x2="262" y2="148" stroke="#fb7185" stroke-width="1" stroke-dasharray="4,4" marker-end="url(#arrowhead-rose)"/>
+      <text x="350" y="108" fill="#fb7185" font-size="8" text-anchor="middle">guarded by · D014</text>
+
+      <!-- Bootlock → setup_vector_layer (rose dashed) -->
+      <line x1="640" y1="110" x2="660" y2="448" stroke="#fb7185" stroke-width="1" stroke-dasharray="4,4" marker-end="url(#arrowhead-rose)"/>
+      <text x="700" y="280" fill="#fb7185" font-size="8" transform="rotate(90 700 280)">guarded by · D014</text>
+
+      <!-- run_index_vector → build_vector_index -->
+      <line x1="262" y1="195" x2="288" y2="195" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+
+      <!-- build_vector_index → VectorStore (commit_build) -->
+      <line x1="492" y1="195" x2="518" y2="195" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+      <text x="505" y="188" fill="#94a3b8" font-size="7" text-anchor="middle">commit_build</text>
+
+      <!-- VectorStore → RecallEngine (load_all) -->
+      <path d="M 580 250 Q 360 270 200 288" fill="none" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+      <text x="380" y="265" fill="#94a3b8" font-size="8">load_all · rows 快照 · text 留空</text>
+
+      <!-- RecallEngine ⇄ EmbedClient (bidirectional) -->
+      <line x1="342" y1="345" x2="378" y2="345" stroke="#34d399" stroke-width="1.2" marker-end="url(#arrowhead-emerald)"/>
+      <line x1="378" y1="360" x2="342" y2="360" stroke="#34d399" stroke-width="1.2" marker-end="url(#arrowhead-emerald)"/>
+      <text x="360" y="338" fill="#34d399" font-size="7" text-anchor="middle">query → 1024-d</text>
+      <text x="360" y="375" fill="#94a3b8" font-size="7" text-anchor="middle">instruct_query + QUERY_INSTRUCT</text>
+
+      <!-- LLM Agent → VectorSearchTool (Tool::execute) -->
+      <line x1="262" y1="490" x2="288" y2="490" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+      <text x="275" y="482" fill="#94a3b8" font-size="7" text-anchor="middle">Tool::execute</text>
+
+      <!-- VectorSearchTool → RecallEngine (engine.recall) -->
+      <path d="M 380 448 Q 320 430 240 412" fill="none" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+      <text x="300" y="425" fill="#94a3b8" font-size="7">engine.recall(ctx)</text>
+
+      <!-- setup_vector_layer → RecallEngine (open + recall) -->
+      <path d="M 580 448 Q 480 430 340 412" fill="none" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+      <text x="460" y="425" fill="#94a3b8" font-size="7">RecallEngine::open · recall(task, 10)</text>
+
+      <!-- setup_vector_layer → VectorStore (open path) -->
+      <path d="M 700 448 Q 740 350 700 252" fill="none" stroke="#64748b" stroke-width="1.1" stroke-dasharray="2,2" marker-end="url(#arrowhead)"/>
+      <text x="780" y="360" fill="#94a3b8" font-size="7">构造 Arc</text>
+
+      <!-- setup_vector_layer → format_recall_block -->
+      <line x1="610" y1="532" x2="450" y2="568" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+      <text x="560" y="552" fill="#94a3b8" font-size="7">直接消费</text>
+
+      <!-- VectorSearchTool → format_recall_block -->
+      <line x1="400" y1="532" x2="400" y2="568" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+
+      <!-- format_recall_block → Harness -->
+      <line x1="512" y1="600" x2="538" y2="600" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+      <text x="525" y="592" fill="#94a3b8" font-size="7" text-anchor="middle">seed</text>
+
+      <!-- setup_vector_layer → Harness (with_first_user_suffix) -->
+      <line x1="780" y1="490" x2="780" y2="568" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+      <text x="794" y="535" fill="#94a3b8" font-size="7">with_first_user_suffix</text>
+
+      <!-- ====================== COMPONENTS ====================== -->
+
+      <!-- Row 1: Config & Trigger (y=50-110) -->
+
+      <!-- VectorConfig (slate) -->
+      <rect x="60" y="50" width="200" height="60" rx="6" fill="#0f172a"/>
+      <rect x="60" y="50" width="200" height="60" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="160" y="72" fill="white" font-size="12" font-weight="600" text-anchor="middle">VectorConfig</text>
+      <text x="160" y="88" fill="#94a3b8" font-size="9" text-anchor="middle">[vector] · config.rs:92-104</text>
+      <text x="160" y="102" fill="#64748b" font-size="8" text-anchor="middle">embed_model · dims · mode · budget</text>
+
+      <!-- --vector flag (slate) -->
+      <rect x="290" y="50" width="140" height="60" rx="6" fill="#0f172a"/>
+      <rect x="290" y="50" width="140" height="60" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="360" y="72" fill="white" font-size="12" font-weight="600" text-anchor="middle">--vector flag</text>
+      <text x="360" y="88" fill="#94a3b8" font-size="9" text-anchor="middle">cli.rs:48-49</text>
+      <text x="360" y="102" fill="#64748b" font-size="8" text-anchor="middle">启用整个向量层</text>
+
+      <!-- Bootlock D014 (rose dashed) -->
+      <rect x="460" y="50" width="180" height="60" rx="6" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,4"/>
+      <text x="550" y="72" fill="white" font-size="12" font-weight="600" text-anchor="middle">Bootlock D014</text>
+      <text x="550" y="88" fill="#fb7185" font-size="9" text-anchor="middle">cli.rs:162-166 · 300s</text>
+      <text x="550" y="102" fill="#94a3b8" font-size="8" text-anchor="middle">非跨 LLM · 不罩检索</text>
+
+      <!-- Row 2: Index Build (y=150-250) -->
+
+      <!-- run_index_vector -->
+      <rect x="60" y="150" width="200" height="100" rx="6" fill="#0f172a"/>
+      <rect x="60" y="150" width="200" height="100" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="160" y="173" fill="white" font-size="12" font-weight="600" text-anchor="middle">run_index_vector</text>
+      <text x="160" y="190" fill="#94a3b8" font-size="9" text-anchor="middle">cli.rs · 索引构建入口</text>
+      <text x="160" y="206" fill="#cbd5e1" font-size="8" text-anchor="middle">fingerprint = sha256(</text>
+      <text x="160" y="219" fill="#cbd5e1" font-size="8" text-anchor="middle">abs_path + git HEAD)[:16]</text>
+      <text x="160" y="234" fill="#94a3b8" font-size="8" text-anchor="middle">.codesleuth/indexes/&lt;fp&gt;</text>
+      <text x="160" y="245" fill="#64748b" font-size="7" text-anchor="middle">store.rs:303-312</text>
+
+      <!-- build_vector_index -->
+      <rect x="290" y="150" width="200" height="100" rx="6" fill="#0f172a"/>
+      <rect x="290" y="150" width="200" height="100" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="390" y="173" fill="white" font-size="12" font-weight="600" text-anchor="middle">build_vector_index</text>
+      <text x="390" y="190" fill="#94a3b8" font-size="9" text-anchor="middle">store.rs:201-232</text>
+      <text x="390" y="206" fill="#cbd5e1" font-size="8" text-anchor="middle">commit_build · 单事务</text>
+      <text x="390" y="219" fill="#cbd5e1" font-size="8" text-anchor="middle">GC + upsert chunks</text>
+      <text x="390" y="232" fill="#cbd5e1" font-size="8" text-anchor="middle">+ meta 翻新</text>
+      <text x="390" y="245" fill="#94a3b8" font-size="7" text-anchor="middle">失败 → audit "degraded"</text>
+
+      <!-- VectorStore (violet, DB) -->
+      <rect x="520" y="150" width="240" height="100" rx="6" fill="#0f172a"/>
+      <rect x="520" y="150" width="240" height="100" rx="6" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="640" y="173" fill="white" font-size="12" font-weight="600" text-anchor="middle">VectorStore · vectors.db</text>
+      <text x="640" y="190" fill="#a78bfa" font-size="9" text-anchor="middle">store.rs:41 · SQLite · WAL</text>
+      <text x="640" y="206" fill="#cbd5e1" font-size="8" text-anchor="middle">chunks(file,line,line_end,</text>
+      <text x="640" y="219" fill="#cbd5e1" font-size="8" text-anchor="middle">symbol,kind,lang,text_hash,</text>
+      <text x="640" y="232" fill="#cbd5e1" font-size="8" text-anchor="middle">embedding BLOB,dim)</text>
+      <text x="640" y="244" fill="#94a3b8" font-size="7" text-anchor="middle">+ meta(k,v) · descriptions(k,t,d)</text>
+
+      <!-- Row 3: Core (y=290-410) -->
+
+      <!-- RecallEngine (emerald, larger) -->
+      <rect x="60" y="290" width="280" height="120" rx="6" fill="#0f172a"/>
+      <rect x="60" y="290" width="280" height="120" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="200" y="313" fill="white" font-size="12" font-weight="600" text-anchor="middle">RecallEngine</text>
+      <text x="200" y="330" fill="#34d399" font-size="9" text-anchor="middle">recall.rs:25 · rows / alive / hnsw</text>
+      <text x="200" y="346" fill="#cbd5e1" font-size="8" text-anchor="middle">HNSW: ef=64 · k×3 超采 → cosine</text>
+      <text x="200" y="358" fill="#cbd5e1" font-size="8" text-anchor="middle">→ alive 过滤 → top-K</text>
+      <text x="200" y="373" fill="#cbd5e1" font-size="8" text-anchor="middle">Brute: alive 全扫 cosine 排序</text>
+      <text x="200" y="385" fill="#cbd5e1" font-size="8" text-anchor="middle">row idx → Chunk · index=INDEX_NOT_AVAILABLE</text>
+      <text x="200" y="399" fill="#94a3b8" font-size="7" text-anchor="middle">MIN_HNSW=100k · TOMB=0.2 · OVER=3</text>
+      <text x="200" y="408" fill="#64748b" font-size="7" text-anchor="middle">tombstone/compact · 预留入口</text>
+
+      <!-- EmbedClient (emerald) -->
+      <rect x="380" y="290" width="220" height="120" rx="6" fill="#0f172a"/>
+      <rect x="380" y="290" width="220" height="120" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="490" y="313" fill="white" font-size="12" font-weight="600" text-anchor="middle">EmbedClient</text>
+      <text x="490" y="330" fill="#34d399" font-size="9" text-anchor="middle">embed.rs:42 · HTTP</text>
+      <text x="490" y="346" fill="#cbd5e1" font-size="8" text-anchor="middle">1024-d · batch=64</text>
+      <text x="490" y="358" fill="#cbd5e1" font-size="8" text-anchor="middle">EMBED_CONCURRENCY=4 · 120s</text>
+      <text x="490" y="373" fill="#cbd5e1" font-size="8" text-anchor="middle">5xx/429 retryable</text>
+      <text x="490" y="385" fill="#cbd5e1" font-size="8" text-anchor="middle">2s 重试一次</text>
+      <text x="490" y="399" fill="#94a3b8" font-size="7" text-anchor="middle">index 错位 → 拒绝（防静默投毒）</text>
+      <text x="490" y="408" fill="#64748b" font-size="7" text-anchor="middle">instruct_query 加 QUERY_INSTRUCT 前缀</text>
+
+      <!-- HNSW Shadow annotation -->
+      <rect x="640" y="290" width="180" height="55" rx="6" fill="rgba(6, 78, 59, 0.2)" stroke="#34d399" stroke-width="1" stroke-dasharray="3,3"/>
+      <text x="730" y="310" fill="#34d399" font-size="10" font-weight="600" text-anchor="middle">HNSW 影子图</text>
+      <text x="730" y="325" fill="#94a3b8" font-size="8" text-anchor="middle">≥ MIN_HNSW_SIZE 才 build</text>
+      <text x="730" y="338" fill="#94a3b8" font-size="8" text-anchor="middle">model/dim mismatch 跳过</text>
+
+      <!-- Degradation annotation (rose) -->
+      <rect x="640" y="355" width="180" height="55" rx="6" fill="rgba(136, 19, 55, 0.2)" stroke="#fb7185" stroke-width="1" stroke-dasharray="3,3"/>
+      <text x="730" y="374" fill="#fb7185" font-size="10" font-weight="600" text-anchor="middle">降级 / 失败留痕</text>
+      <text x="730" y="388" fill="#cbd5e1" font-size="8" text-anchor="middle">build/open/recall →</text>
+      <text x="730" y="400" fill="#cbd5e1" font-size="8" text-anchor="middle">audit "degraded" · warn</text>
+
+      <!-- Row 4: Consumers (y=450-530) -->
+
+      <!-- LLM Agent (cyan) -->
+      <rect x="60" y="450" width="200" height="80" rx="6" fill="#0f172a"/>
+      <rect x="60" y="450" width="200" height="80" rx="6" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="160" y="473" fill="white" font-size="12" font-weight="600" text-anchor="middle">LLM Agent</text>
+      <text x="160" y="490" fill="#22d3ee" font-size="9" text-anchor="middle">Tool::execute</text>
+      <text x="160" y="506" fill="#cbd5e1" font-size="8" text-anchor="middle">name="vector_search"</text>
+      <text x="160" y="520" fill="#94a3b8" font-size="8" text-anchor="middle">query 必填 · k clamp(1,10)</text>
+
+      <!-- VectorSearchTool (slate) -->
+      <rect x="290" y="450" width="220" height="80" rx="6" fill="#0f172a"/>
+      <rect x="290" y="450" width="220" height="80" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="400" y="473" fill="white" font-size="12" font-weight="600" text-anchor="middle">VectorSearchTool</text>
+      <text x="400" y="490" fill="#94a3b8" font-size="9" text-anchor="middle">tools/vector_search.rs:10-63</text>
+      <text x="400" y="506" fill="#cbd5e1" font-size="8" text-anchor="middle">Arc&lt;RecallEngine&gt; · default_k=8</text>
+      <text x="400" y="520" fill="#94a3b8" font-size="8" text-anchor="middle">空结果 → 提示换 grep/find_files</text>
+
+      <!-- setup_vector_layer (slate) -->
+      <rect x="540" y="450" width="240" height="80" rx="6" fill="#0f172a"/>
+      <rect x="540" y="450" width="240" height="80" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="660" y="473" fill="white" font-size="12" font-weight="600" text-anchor="middle">setup_vector_layer</text>
+      <text x="660" y="490" fill="#94a3b8" font-size="9" text-anchor="middle">cli.rs:540-665</text>
+      <text x="660" y="506" fill="#cbd5e1" font-size="8" text-anchor="middle">VectorStore → RecallEngine::open</text>
+      <text x="660" y="520" fill="#94a3b8" font-size="8" text-anchor="middle">直接消费 recall(task, 10) 当 seed</text>
+
+      <!-- Row 5: Output (y=570-630) -->
+
+      <!-- format_recall_block (emerald) -->
+      <rect x="290" y="570" width="220" height="60" rx="6" fill="#0f172a"/>
+      <rect x="290" y="570" width="220" height="60" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="400" y="592" fill="white" font-size="12" font-weight="600" text-anchor="middle">format_recall_block</text>
+      <text x="400" y="608" fill="#34d399" font-size="9" text-anchor="middle">recall.rs:141-159 · associated fn</text>
+      <text x="400" y="622" fill="#94a3b8" font-size="8" text-anchor="middle">[语义召回 · 起步线索] · 免责</text>
+
+      <!-- Harness (slate) -->
+      <rect x="540" y="570" width="240" height="60" rx="6" fill="#0f172a"/>
+      <rect x="540" y="570" width="240" height="60" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="660" y="592" fill="white" font-size="12" font-weight="600" text-anchor="middle">Harness · task prompt</text>
+      <text x="660" y="608" fill="#94a3b8" font-size="9" text-anchor="middle">cli.rs:367-370 · with_first_user_suffix</text>
+      <text x="660" y="622" fill="#94a3b8" font-size="8" text-anchor="middle">writeguard 考后 diff 自证零写入</text>
+
+      <!-- ====================== LEGEND (OUTSIDE region: y=680+ ) ====================== -->
+      <g transform="translate(20, 700)">
+        <rect x="0" y="0" width="1160" height="120" rx="10" fill="#0f172a" stroke="#1e293b" stroke-width="1"/>
+        <text x="20" y="22" fill="#cbd5e1" font-size="11" font-weight="600">Legend · 图例</text>
+        <line x1="100" y1="18" x2="1140" y2="18" stroke="#1e293b" stroke-width="0.5"/>
+
+        <!-- Row 1 of legend -->
+        <rect x="20" y="36" width="14" height="14" rx="3" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="42" y="47" fill="#cbd5e1" font-size="10">CLI / 配置 / 工具 / Harness</text>
+
+        <rect x="240" y="36" width="14" height="14" rx="3" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="262" y="47" fill="#cbd5e1" font-size="10">后端核心（recall / embed / format）</text>
+
+        <rect x="520" y="36" width="14" height="14" rx="3" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="542" y="47" fill="#cbd5e1" font-size="10">数据库 · SQLite vectors.db</text>
+
+        <rect x="760" y="36" width="14" height="14" rx="3" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="782" y="47" fill="#cbd5e1" font-size="10">上游 · LLM Agent</text>
+
+        <rect x="920" y="36" width="14" height="14" rx="3" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="3,3"/>
+        <text x="942" y="47" fill="#cbd5e1" font-size="10">锁 / 降级</text>
+
+        <!-- Row 2 of legend -->
+        <line x1="20" y1="74" x2="50" y2="74" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+        <text x="60" y="78" fill="#94a3b8" font-size="9">数据 / 调用 / 装配</text>
+
+        <line x1="200" y1="74" x2="230" y2="74" stroke="#34d399" stroke-width="1.2" marker-end="url(#arrowhead-emerald)"/>
+        <text x="240" y="78" fill="#94a3b8" font-size="9">query ↔ embed</text>
+
+        <line x1="340" y1="74" x2="370" y2="74" stroke="#fb7185" stroke-width="1" stroke-dasharray="4,4" marker-end="url(#arrowhead-rose)"/>
+        <text x="380" y="78" fill="#94a3b8" font-size="9">锁 / 守卫（D014）</text>
+
+        <line x1="520" y1="74" x2="550" y2="74" stroke="#64748b" stroke-width="1.1" stroke-dasharray="3,3" marker-end="url(#arrowhead)"/>
+        <text x="560" y="78" fill="#94a3b8" font-size="9">旗标使能（--vector）</text>
+
+        <line x1="760" y1="74" x2="790" y2="74" stroke="#fbbf24" stroke-width="1" stroke-dasharray="8,4"/>
+        <text x="800" y="78" fill="#94a3b8" font-size="9">仓库 / 区域边界</text>
+
+        <text x="20" y="108" fill="#64748b" font-size="8">INDEX_NOT_AVAILABLE · 嵌空返错 · 2s 重试 · meta mismatch 跳过 HNSW 降级 brute · tombstone/compact 在仓库内仅测试调用（预留入口）</text>
+      </g>
+
+    </svg>
+  </div>
+  <div class="footer">
+    <span class="badge">●</span> Vector Recall Engine · 2 paths (Tool + CLI seed) · HNSW k×3 + Brute fallback · tombstone/compact reserved
+  </div>
+</div>
+</body>
+</html>
