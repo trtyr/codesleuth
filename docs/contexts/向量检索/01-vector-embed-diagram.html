@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>向量嵌入（向量检索）架构图</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #020617;
+    color: #e2e8f0;
+    font-family: 'JetBrains Mono', monospace;
+    padding: 24px;
+    min-height: 100vh;
+  }
+  .container { max-width: 1100px; margin: 0 auto; }
+  .header {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 16px; padding: 14px 18px;
+    background: #0f172a; border: 1px solid #1e293b; border-radius: 8px;
+  }
+  .pulse {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #34d399;
+    box-shadow: 0 0 12px #34d399;
+    animation: pulse 2s ease-in-out infinite;
+    flex-shrink: 0;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(0.85); }
+  }
+  .header-text { flex: 1; }
+  .title { font-size: 15px; font-weight: 700; color: #f1f5f9; }
+  .subtitle { font-size: 10px; color: #94a3b8; margin-top: 3px; }
+  .svg-card {
+    background: #0f172a;
+    border: 1px solid #1e293b;
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+  svg { width: 100%; height: auto; display: block; }
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
+  .card { background: #0f172a; border: 1px solid #1e293b; border-radius: 8px; padding: 14px; }
+  .card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .card-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .card h3 { font-size: 12px; font-weight: 600; color: #f1f5f9; }
+  .card ul { list-style: none; }
+  .card li { font-size: 10px; color: #94a3b8; padding: 3px 0; line-height: 1.5; }
+  .footer { font-size: 9px; color: #475569; text-align: center; padding: 8px; }
+</style>
+</head>
+<body>
+<div class="container" id="report-container">
+  <div class="header">
+    <div class="pulse"></div>
+    <div class="header-text">
+      <div class="title">向量嵌入（向量检索）架构图</div>
+      <div class="subtitle">EmbedClient · Qwen3 OpenAI 兼容 /embeddings · 1024-dim Matryoshka · src/vector/embed.rs</div>
+    </div>
+  </div>
+
+  <div class="svg-card">
+    <svg viewBox="0 0 1000 780" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+          <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+        </pattern>
+        <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
+        </marker>
+        <marker id="arrowhead-rose" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#fb7185"/>
+        </marker>
+        <marker id="arrowhead-amber" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#fbbf24"/>
+        </marker>
+      </defs>
+      <rect width="1000" height="780" fill="#020617"/>
+      <rect width="1000" height="780" fill="url(#grid)"/>
+
+      <!-- ===== ARROWS (drawn first, render behind components) ===== -->
+
+      <!-- cfg.vector → src/cli.rs -->
+      <line x1="200" y1="75" x2="248" y2="75" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+      <text x="200" y="68" fill="#64748b" font-size="7">model/dims</text>
+
+      <!-- [llm] → src/cli.rs -->
+      <line x1="405" y1="75" x2="438" y2="75" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+      <text x="397" y="68" fill="#64748b" font-size="7">base_url/key</text>
+
+      <!-- src/cli.rs → EmbedClient::embed (construct) -->
+      <line x1="148" y1="110" x2="148" y2="148" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+      <text x="156" y="132" fill="#64748b" font-size="8">构造</text>
+
+      <!-- compose_input → EmbedClient::embed -->
+      <line x1="710" y1="110" x2="220" y2="200" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+      <text x="455" y="135" fill="#64748b" font-size="7">embed 文本 (EmbedMode)</text>
+
+      <!-- EmbedClient::embed → dedup (right) -->
+      <line x1="250" y1="180" x2="305" y2="180" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+
+      <!-- dedup → split_batches -->
+      <line x1="430" y1="180" x2="455" y2="180" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+
+      <!-- split_batches → Semaphore+JoinSet -->
+      <line x1="520" y1="205" x2="560" y2="240" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+
+      <!-- Semaphore+JoinSet → embed_one -->
+      <line x1="730" y1="265" x2="760" y2="265" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+      <text x="732" y="258" fill="#64748b" font-size="7">并发</text>
+
+      <!-- embed_one → Qwen3 /embeddings -->
+      <line x1="865" y1="290" x2="865" y2="320" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+      <text x="872" y="307" fill="#64748b" font-size="7">POST</text>
+
+      <!-- Qwen3 → validate_index_alignment (response back) -->
+      <line x1="745" y1="365" x2="490" y2="365" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+      <text x="570" y="358" fill="#64748b" font-size="7">响应 index</text>
+
+      <!-- 2s 重试 → embed_one (retry loop) -->
+      <path d="M 580 335 L 580 300 L 760 300" fill="none" stroke="#94a3b8" stroke-width="1" stroke-dasharray="3,3" marker-end="url(#arrowhead)"/>
+      <text x="620" y="295" fill="#94a3b8" font-size="7">retry 2s</text>
+
+      <!-- instruct_query → EmbedClient (query path) -->
+      <path d="M 380 410 L 380 270 L 250 270" fill="none" stroke="#fb7185" stroke-width="1.2" stroke-dasharray="4,4" marker-end="url(#arrowhead-rose)"/>
+      <text x="262" y="445" fill="#fb7185" font-size="7">查询路径</text>
+
+      <!-- RecallEngine → instruct_query -->
+      <line x1="540" y1="465" x2="450" y2="460" stroke="#fb7185" stroke-width="1.2" stroke-dasharray="4,4" marker-end="url(#arrowhead-rose)"/>
+      <text x="460" y="453" fill="#fb7185" font-size="7">recall 调</text>
+
+      <!-- EmbedClient::embed → build_vector_index (down) -->
+      <line x1="148" y1="295" x2="148" y2="465" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+      <text x="156" y="380" fill="#64748b" font-size="7">Vec&lt;Vec&lt;f32&gt;&gt;</text>
+
+      <!-- build_vector_index → SQLite -->
+      <line x1="265" y1="515" x2="305" y2="515" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+      <text x="265" y="508" fill="#64748b" font-size="7">落库</text>
+
+      <!-- SQLite → RecallEngine -->
+      <line x1="465" y1="515" x2="505" y2="515" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+      <text x="465" y="508" fill="#64748b" font-size="7">HNSW 读</text>
+
+      <!-- RecallEngine → HNSW -->
+      <line x1="725" y1="515" x2="765" y2="515" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+      <text x="725" y="508" fill="#64748b" font-size="7">三段式</text>
+
+      <!-- HNSW → VectorSearchTool -->
+      <line x1="845" y1="575" x2="200" y2="640" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrowhead)"/>
+      <text x="510" y="600" fill="#64748b" font-size="7">召回结果</text>
+
+      <!-- VectorSearchTool → MCP / Tool -->
+      <line x1="365" y1="680" x2="465" y2="680" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+      <text x="365" y="673" fill="#64748b" font-size="7">vector_search 工具</text>
+
+      <!-- ===== COMPONENTS ===== -->
+
+      <!-- cfg.vector -->
+      <rect x="30" y="40" width="170" height="70" fill="#0f172a"/>
+      <rect x="30" y="40" width="170" height="70" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="115" y="65" fill="white" font-size="12" font-weight="600" text-anchor="middle">cfg.vector</text>
+      <text x="115" y="82" fill="#94a3b8" font-size="9" text-anchor="middle">embed_model</text>
+      <text x="115" y="96" fill="#94a3b8" font-size="9" text-anchor="middle">embed_dims</text>
+
+      <!-- [llm] base_url/api_key -->
+      <rect x="220" y="40" width="185" height="70" fill="#0f172a"/>
+      <rect x="220" y="40" width="185" height="70" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="312" y="65" fill="white" font-size="12" font-weight="600" text-anchor="middle">[llm]</text>
+      <text x="312" y="82" fill="#94a3b8" font-size="9" text-anchor="middle">base_url / api_key</text>
+      <text x="312" y="96" fill="#64748b" font-size="8" text-anchor="middle">缺省跟随</text>
+
+      <!-- src/cli.rs -->
+      <rect x="438" y="40" width="180" height="70" fill="#0f172a"/>
+      <rect x="438" y="40" width="180" height="70" rx="6" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="528" y="65" fill="white" font-size="12" font-weight="600" text-anchor="middle">src/cli.rs</text>
+      <text x="528" y="82" fill="#94a3b8" font-size="9" text-anchor="middle">vector build / run</text>
+      <text x="528" y="96" fill="#64748b" font-size="8" text-anchor="middle">引导构造 EmbedClient</text>
+
+      <!-- compose_input -->
+      <rect x="640" y="40" width="190" height="70" fill="#0f172a"/>
+      <rect x="640" y="40" width="190" height="70" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="735" y="65" fill="white" font-size="12" font-weight="600" text-anchor="middle">compose_input</text>
+      <text x="735" y="82" fill="#94a3b8" font-size="9" text-anchor="middle">EmbedMode Raw/Composite</text>
+      <text x="735" y="96" fill="#64748b" font-size="8" text-anchor="middle">组装 embed 文本</text>
+
+      <!-- 1024-dim 配置说明 -->
+      <rect x="850" y="40" width="120" height="70" fill="#0f172a"/>
+      <rect x="850" y="40" width="120" height="70" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="910" y="65" fill="white" font-size="11" font-weight="600" text-anchor="middle">dimensions</text>
+      <text x="910" y="82" fill="#94a3b8" font-size="9" text-anchor="middle">默认 1024</text>
+      <text x="910" y="96" fill="#64748b" font-size="8" text-anchor="middle">实验 4096</text>
+
+      <!-- EmbedClient::embed (big orchestrator) -->
+      <rect x="30" y="150" width="220" height="145" fill="#0f172a"/>
+      <rect x="30" y="150" width="220" height="145" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="140" y="180" fill="white" font-size="13" font-weight="700" text-anchor="middle">EmbedClient::embed</text>
+      <text x="140" y="200" fill="#34d399" font-size="9" text-anchor="middle">src/vector/embed.rs</text>
+      <text x="140" y="222" fill="#94a3b8" font-size="8" text-anchor="middle">tokio async 编排</text>
+      <text x="140" y="238" fill="#94a3b8" font-size="8" text-anchor="middle">按批序号还原回填</text>
+      <text x="140" y="256" fill="#94a3b8" font-size="8" text-anchor="middle">→ Vec&lt;Vec&lt;f32&gt;&gt;</text>
+      <text x="140" y="276" fill="#64748b" font-size="8" text-anchor="middle">batch_size 默认 64</text>
+      <text x="140" y="289" fill="#64748b" font-size="7" text-anchor="middle">src/vector/embed.rs:33-146</text>
+
+      <!-- dedup by hash -->
+      <rect x="305" y="155" width="125" height="50" fill="#0f172a"/>
+      <rect x="305" y="155" width="125" height="50" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="367" y="175" fill="white" font-size="11" font-weight="600" text-anchor="middle">dedup by hash</text>
+      <text x="367" y="191" fill="#94a3b8" font-size="8" text-anchor="middle">去重</text>
+
+      <!-- split_batches -->
+      <rect x="455" y="155" width="135" height="50" fill="#0f172a"/>
+      <rect x="455" y="155" width="135" height="50" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="522" y="175" fill="white" font-size="11" font-weight="600" text-anchor="middle">split_batches</text>
+      <text x="522" y="191" fill="#94a3b8" font-size="8" text-anchor="middle">batch_size = 64</text>
+
+      <!-- Semaphore + JoinSet -->
+      <rect x="560" y="240" width="200" height="50" fill="#0f172a"/>
+      <rect x="560" y="240" width="200" height="50" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="660" y="260" fill="white" font-size="11" font-weight="600" text-anchor="middle">Semaphore + JoinSet</text>
+      <text x="660" y="276" fill="#94a3b8" font-size="8" text-anchor="middle">EMBED_CONCURRENCY = 4</text>
+
+      <!-- embed_one → build_request -->
+      <rect x="760" y="240" width="210" height="50" fill="#0f172a"/>
+      <rect x="760" y="240" width="210" height="50" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="865" y="260" fill="white" font-size="11" font-weight="600" text-anchor="middle">embed_one</text>
+      <text x="865" y="276" fill="#94a3b8" font-size="8" text-anchor="middle">build_request · float</text>
+
+      <!-- validate_index_alignment -->
+      <rect x="305" y="340" width="200" height="50" fill="#0f172a"/>
+      <rect x="305" y="340" width="200" height="50" rx="6" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,4"/>
+      <text x="405" y="360" fill="white" font-size="11" font-weight="600" text-anchor="middle">validate_index_alignment</text>
+      <text x="405" y="375" fill="#fb7185" font-size="8" text-anchor="middle">index 严格 0-based · 错位即拒</text>
+
+      <!-- 失败 2s 兜底重试 -->
+      <rect x="520" y="340" width="140" height="50" fill="#0f172a"/>
+      <rect x="520" y="340" width="140" height="50" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="590" y="360" fill="white" font-size="11" font-weight="600" text-anchor="middle">2s 兜底重试</text>
+      <text x="590" y="375" fill="#94a3b8" font-size="8" text-anchor="middle">失败一次</text>
+
+      <!-- instruct_query -->
+      <rect x="305" y="410" width="200" height="55" fill="#0f172a"/>
+      <rect x="305" y="410" width="200" height="55" rx="6" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,4"/>
+      <text x="405" y="432" fill="white" font-size="11" font-weight="600" text-anchor="middle">instruct_query</text>
+      <text x="405" y="447" fill="#fb7185" font-size="8" text-anchor="middle">QUERY_INSTRUCT 前缀</text>
+      <text x="405" y="459" fill="#64748b" font-size="7" text-anchor="middle">仅查询侧拼</text>
+
+      <!-- 文档侧不拼 -->
+      <rect x="520" y="410" width="140" height="55" fill="#0f172a"/>
+      <rect x="520" y="410" width="140" height="55" rx="6" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,4"/>
+      <text x="590" y="432" fill="white" font-size="11" font-weight="600" text-anchor="middle">文档侧不拼</text>
+      <text x="590" y="447" fill="#fb7185" font-size="8" text-anchor="middle">Composite/Raw</text>
+      <text x="590" y="459" fill="#64748b" font-size="7" text-anchor="middle">不拼指令前缀</text>
+
+      <!-- Qwen3 /embeddings (external) -->
+      <rect x="760" y="320" width="210" height="130" fill="#0f172a"/>
+      <rect x="760" y="320" width="210" height="130" rx="6" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+      <text x="865" y="348" fill="white" font-size="12" font-weight="600" text-anchor="middle">Qwen3 /embeddings</text>
+      <text x="865" y="368" fill="#fbbf24" font-size="9" text-anchor="middle">OpenAI 兼容</text>
+      <text x="865" y="386" fill="#94a3b8" font-size="8" text-anchor="middle">1024-dim Matryoshka</text>
+      <text x="865" y="400" fill="#94a3b8" font-size="8" text-anchor="middle">注释允许 4096 实验</text>
+      <text x="865" y="418" fill="#64748b" font-size="8" text-anchor="middle">model / dimensions / float</text>
+      <text x="865" y="434" fill="#64748b" font-size="7" text-anchor="middle">外部 LLM 嵌入服务</text>
+
+      <!-- build_vector_index -->
+      <rect x="30" y="465" width="235" height="100" fill="#0f172a"/>
+      <rect x="30" y="465" width="235" height="100" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="147" y="492" fill="white" font-size="12" font-weight="600" text-anchor="middle">build_vector_index</text>
+      <text x="147" y="510" fill="#34d399" font-size="9" text-anchor="middle">src/vector/build.rs</text>
+      <text x="147" y="528" fill="#94a3b8" font-size="8" text-anchor="middle">调 embed.embed</text>
+      <text x="147" y="542" fill="#94a3b8" font-size="8" text-anchor="middle">拿 Vec&lt;Vec&lt;f32&gt;&gt;</text>
+      <text x="147" y="556" fill="#64748b" font-size="8" text-anchor="middle">落 SQLite 持久化</text>
+
+      <!-- SQLite -->
+      <rect x="305" y="465" width="160" height="100" fill="#0f172a"/>
+      <rect x="305" y="465" width="160" height="100" rx="6" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="385" y="495" fill="white" font-size="13" font-weight="700" text-anchor="middle">SQLite</text>
+      <text x="385" y="513" fill="#a78bfa" font-size="9" text-anchor="middle">vector_index 表</text>
+      <text x="385" y="530" fill="#94a3b8" font-size="8" text-anchor="middle">HNSW 索引</text>
+      <text x="385" y="544" fill="#94a3b8" font-size="8" text-anchor="middle">持久化嵌入向量</text>
+      <text x="385" y="558" fill="#64748b" font-size="7" text-anchor="middle">下游 RecallEngine 读取</text>
+
+      <!-- RecallEngine::recall -->
+      <rect x="505" y="465" width="220" height="100" fill="#0f172a"/>
+      <rect x="505" y="465" width="220" height="100" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="615" y="492" fill="white" font-size="12" font-weight="600" text-anchor="middle">RecallEngine::recall</text>
+      <text x="615" y="510" fill="#34d399" font-size="9" text-anchor="middle">src/vector/recall.rs</text>
+      <text x="615" y="528" fill="#94a3b8" font-size="8" text-anchor="middle">单条嵌入 → 三段式</text>
+      <text x="615" y="542" fill="#94a3b8" font-size="8" text-anchor="middle">嵌入前调 instruct_query</text>
+      <text x="615" y="556" fill="#64748b" font-size="8" text-anchor="middle">返回 Top-K 候选</text>
+
+      <!-- HNSW / 暴力 -->
+      <rect x="765" y="465" width="160" height="100" fill="#0f172a"/>
+      <rect x="765" y="465" width="160" height="100" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="845" y="495" fill="white" font-size="12" font-weight="600" text-anchor="middle">HNSW / 暴力</text>
+      <text x="845" y="513" fill="#94a3b8" font-size="9" text-anchor="middle">三段式召回</text>
+      <text x="845" y="530" fill="#94a3b8" font-size="8" text-anchor="middle">ANN + 候选重排</text>
+      <text x="845" y="544" fill="#94a3b8" font-size="8" text-anchor="middle">最终结果回 Tool</text>
+      <text x="845" y="558" fill="#64748b" font-size="7" text-anchor="middle">src/vector/recall.rs 内部</text>
+
+      <!-- VectorSearchTool -->
+      <rect x="30" y="640" width="335" height="80" fill="#0f172a"/>
+      <rect x="30" y="640" width="335" height="80" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="197" y="667" fill="white" font-size="12" font-weight="600" text-anchor="middle">VectorSearchTool::execute</text>
+      <text x="197" y="685" fill="#34d399" font-size="9" text-anchor="middle">src/tools/vector_search.rs</text>
+      <text x="197" y="702" fill="#94a3b8" font-size="8" text-anchor="middle">通过 engine.recall 对外暴露</text>
+      <text x="197" y="714" fill="#64748b" font-size="7" text-anchor="middle">为 vector_search 工具 · src/vector/mod.rs:1-21 导出</text>
+
+      <!-- MCP / Tool -->
+      <rect x="465" y="640" width="460" height="80" fill="#0f172a"/>
+      <rect x="465" y="640" width="460" height="80" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="695" y="667" fill="white" font-size="12" font-weight="600" text-anchor="middle">Tool 注册 / MCP 调用方</text>
+      <text x="695" y="685" fill="#94a3b8" font-size="9" text-anchor="middle">vector_search 工具入口</text>
+      <text x="695" y="702" fill="#94a3b8" font-size="8" text-anchor="middle">Agent 触发 → 调工具 → RecallEngine::recall</text>
+      <text x="695" y="714" fill="#64748b" font-size="7" text-anchor="middle">上游调用方</text>
+
+      <!-- ===== LEGEND (outside all boundaries, y=735+) ===== -->
+      <g transform="translate(30, 738)">
+        <text x="0" y="10" fill="#94a3b8" font-size="9" font-weight="600">图例</text>
+        <rect x="42" y="2" width="14" height="10" rx="2" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1"/>
+        <text x="60" y="11" fill="#cbd5e1" font-size="9">Frontend / CLI</text>
+        <rect x="165" y="2" width="14" height="10" rx="2" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1"/>
+        <text x="183" y="11" fill="#cbd5e1" font-size="9">Backend 模块</text>
+        <rect x="285" y="2" width="14" height="10" rx="2" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1"/>
+        <text x="303" y="11" fill="#cbd5e1" font-size="9">Database</text>
+        <rect x="380" y="2" width="14" height="10" rx="2" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1"/>
+        <text x="398" y="11" fill="#cbd5e1" font-size="9">外部 LLM</text>
+        <rect x="490" y="2" width="14" height="10" rx="2" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1" stroke-dasharray="2,2"/>
+        <text x="508" y="11" fill="#cbd5e1" font-size="9">校验 / 指令前缀</text>
+        <rect x="625" y="2" width="14" height="10" rx="2" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1"/>
+        <text x="643" y="11" fill="#cbd5e1" font-size="9">配置 / 外部</text>
+        <line x1="745" y1="7" x2="775" y2="7" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,4"/>
+        <text x="780" y="11" fill="#cbd5e1" font-size="9">查询路径</text>
+      </g>
+    </svg>
+  </div>
+
+  <div class="cards">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-dot" style="background:#34d399"></div>
+        <h3>核心流水线</h3>
+      </div>
+      <ul>
+        <li>• dedup by hash → split_batches (batch=64)</li>
+        <li>• Semaphore(4) + JoinSet 并发调度</li>
+        <li>• embed_one → build_request → /embeddings</li>
+        <li>• 失败 2s 兜底重试一次</li>
+        <li>• 按批序号还原顺序回填 → Vec&lt;Vec&lt;f32&gt;&gt;</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-dot" style="background:#fb7185"></div>
+        <h3>校验与指令</h3>
+      </div>
+      <ul>
+        <li>• validate_index_alignment: 响应 index 严格 0-based</li>
+        <li>• 错位即拒绝，防止静默投毒</li>
+        <li>• instruct_query: 仅查询侧拼 QUERY_INSTRUCT</li>
+        <li>• 文档侧 (Composite/Raw) 不拼指令前缀</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-dot" style="background:#a78bfa"></div>
+        <h3>上下游契约</h3>
+      </div>
+      <ul>
+        <li>• 上游: src/cli.rs 从 cfg.vector / [llm] 构造</li>
+        <li>• 下游写: build_vector_index 落 SQLite vector_index</li>
+        <li>• 下游读: RecallEngine::recall 三段式 (HNSW/暴力)</li>
+        <li>• 对外: VectorSearchTool → vector_search 工具</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="footer">src/vector/embed.rs · src/vector/build.rs · src/vector/recall.rs · src/tools/vector_search.rs · src/cli.rs · src/vector/mod.rs</div>
+</div>
+</body>
+</html>

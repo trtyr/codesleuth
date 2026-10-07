@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Vector Storage · Component Architecture</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #020617;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    color: #e2e8f0;
+    min-height: 100vh;
+    padding: 24px;
+  }
+  .container { max-width: 1280px; margin: 0 auto; }
+  .header { display: flex; align-items: center; gap: 14px; padding: 8px 0 20px 0; }
+  .pulse-dot {
+    width: 10px; height: 10px;
+    background: #34d399;
+    border-radius: 50%;
+    box-shadow: 0 0 12px rgba(52, 211, 153, 0.6);
+    animation: pulse 2s ease-in-out infinite;
+    flex-shrink: 0;
+  }
+  @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.5; transform: scale(0.85); } }
+  h1 { font-size: 18px; font-weight: 600; color: #f1f5f9; letter-spacing: -0.3px; }
+  .subtitle { font-size: 11px; color: #94a3b8; margin-top: 3px; }
+  .diagram-card {
+    background: #0f172a;
+    border: 1px solid #1e293b;
+    border-radius: 14px;
+    padding: 16px;
+    margin-bottom: 20px;
+  }
+  svg { display: block; width: 100%; height: auto; }
+  .legend-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+    margin-bottom: 16px;
+  }
+  .card {
+    background: #0f172a;
+    border: 1px solid #1e293b;
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .card-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .card h3 { font-size: 11px; font-weight: 600; color: #f1f5f9; letter-spacing: 0.3px; text-transform: uppercase; }
+  .card ul { list-style: none; }
+  .card li { font-size: 10px; color: #94a3b8; line-height: 1.6; padding-left: 10px; position: relative; }
+  .card li::before { content: '›'; position: absolute; left: 0; color: #64748b; }
+  .footer { font-size: 9px; color: #475569; text-align: right; padding: 0 4px; letter-spacing: 0.3px; }
+</style>
+</head>
+<body>
+<div class="container" id="report-container">
+  <div class="header">
+    <div class="pulse-dot"></div>
+    <div>
+      <h1>Vector Storage · Component Architecture</h1>
+      <div class="subtitle">codesleuth · src/vector/* · vectors.db single-file persistence · HNSW session shadow</div>
+    </div>
+  </div>
+
+  <div class="diagram-card">
+    <svg viewBox="0 0 1200 860" xmlns="http://www.w3.org/2000/svg" font-family="JetBrains Mono, monospace">
+      <defs>
+        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+          <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+        </pattern>
+        <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
+        </marker>
+        <marker id="arrowhead-emerald" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#34d399"/>
+        </marker>
+        <marker id="arrowhead-violet" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#a78bfa"/>
+        </marker>
+        <marker id="arrowhead-cyan" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#22d3ee"/>
+        </marker>
+        <marker id="arrowhead-rose" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#fb7185"/>
+        </marker>
+      </defs>
+
+      <!-- Background grid -->
+      <rect width="1200" height="860" fill="url(#grid)"/>
+
+      <!-- Region boundaries (amber dashed) -->
+      <rect x="40" y="300" width="1080" height="130" rx="12" fill="none" stroke="#fbbf24" stroke-width="1.2" stroke-dasharray="8,4" opacity="0.45"/>
+      <text x="50" y="294" font-size="9" fill="#fbbf24" font-weight="600" letter-spacing="0.5">BUILD PIPELINE</text>
+
+      <rect x="50" y="450" width="490" height="320" rx="12" fill="none" stroke="#fbbf24" stroke-width="1.2" stroke-dasharray="8,4" opacity="0.45"/>
+      <text x="60" y="444" font-size="9" fill="#fbbf24" font-weight="600" letter-spacing="0.5">PERSISTENCE LAYER</text>
+
+      <rect x="660" y="450" width="490" height="320" rx="12" fill="none" stroke="#fbbf24" stroke-width="1.2" stroke-dasharray="8,4" opacity="0.45"/>
+      <text x="670" y="444" font-size="9" fill="#fbbf24" font-weight="600" letter-spacing="0.5">RETRIEVAL LAYER</text>
+
+      <!-- Arrows: external entry/dependency calls (slate) -->
+      <g stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)">
+        <path d="M 180,130 L 180,160 L 460,160 L 460,180"/>
+        <path d="M 440,130 L 440,160 L 280,160 L 280,250 L 140,250 L 140,320"/>
+        <path d="M 650,130 L 650,160 L 540,160 L 540,180"/>
+        <path d="M 1000,130 L 1000,160 L 940,160 L 940,180"/>
+      </g>
+
+      <!-- Arrows: build pipeline flow (emerald) -->
+      <g stroke="#34d399" stroke-width="1.5" fill="none" marker-end="url(#arrowhead-emerald)">
+        <path d="M 380,260 L 380,290 L 140,290 L 140,320"/>
+        <path d="M 220,365 L 250,365"/>
+        <path d="M 430,365 L 460,365"/>
+        <path d="M 640,365 L 670,365"/>
+        <path d="M 850,365 L 880,365"/>
+        <path d="M 990,400 L 990,440 L 290,440 L 290,460"/>
+      </g>
+
+      <!-- Arrows: persistence + retrieval (violet) -->
+      <g stroke="#a78bfa" stroke-width="1.5" fill="none" marker-end="url(#arrowhead-violet)">
+        <path d="M 290,570 L 290,640"/>
+        <path d="M 480,515 L 720,515"/>
+        <path d="M 910,570 L 910,640"/>
+      </g>
+
+      <!-- Arrows: tool → retrieval (cyan) -->
+      <g stroke="#22d3ee" stroke-width="1.5" fill="none" marker-end="url(#arrowhead-cyan)">
+        <path d="M 940,260 L 1150,260 L 1150,440 L 850,440 L 850,460"/>
+      </g>
+
+      <!-- Arrows: recall-first injection (rose dashed) -->
+      <g stroke="#fb7185" stroke-width="1.5" fill="none" stroke-dasharray="4,3" marker-end="url(#arrowhead-rose)">
+        <path d="M 280,95 C 280,30 800,30 800,180"/>
+      </g>
+
+      <!-- Component boxes -->
+
+      <!-- run_task (cyan - entry) -->
+      <rect x="80" y="70" width="200" height="60" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="180" y="95" fill="white" font-size="12" font-weight="600" text-anchor="middle">run_task</text>
+      <text x="180" y="112" fill="#94a3b8" font-size="9" text-anchor="middle">src/cli.rs · entry</text>
+
+      <!-- codegraph (slate - external dep) -->
+      <rect x="350" y="70" width="180" height="60" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="440" y="95" fill="white" font-size="12" font-weight="600" text-anchor="middle">codegraph</text>
+      <text x="440" y="112" fill="#94a3b8" font-size="9" text-anchor="middle">symbol table dep</text>
+
+      <!-- bootlock (slate - external dep) -->
+      <rect x="560" y="70" width="180" height="60" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="650" y="95" fill="white" font-size="12" font-weight="600" text-anchor="middle">bootlock</text>
+      <text x="650" y="112" fill="#94a3b8" font-size="9" text-anchor="middle">process mutex</text>
+
+      <!-- LLM Agent (cyan - tool consumer) -->
+      <rect x="900" y="70" width="200" height="60" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="1000" y="95" fill="white" font-size="12" font-weight="600" text-anchor="middle">LLM Agent</text>
+      <text x="1000" y="112" fill="#94a3b8" font-size="9" text-anchor="middle">tool consumer</text>
+
+      <!-- build_vector_index (emerald - orchestrator) -->
+      <rect x="300" y="180" width="320" height="80" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="460" y="208" fill="white" font-size="13" font-weight="600" text-anchor="middle">build_vector_index</text>
+      <text x="460" y="226" fill="#94a3b8" font-size="9" text-anchor="middle">src/vector/build.rs · orchestrator</text>
+      <text x="460" y="244" fill="#94a3b8" font-size="8" text-anchor="middle">plan → hash → compose → embed → commit</text>
+
+      <!-- VectorSearchTool (cyan - tool) -->
+      <rect x="800" y="180" width="280" height="80" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="940" y="208" fill="white" font-size="13" font-weight="600" text-anchor="middle">VectorSearchTool</text>
+      <text x="940" y="226" fill="#94a3b8" font-size="9" text-anchor="middle">src/tools/vector_search.rs</text>
+      <text x="940" y="244" fill="#94a3b8" font-size="8" text-anchor="middle">Arc&lt;RecallEngine&gt; · format_recall_block</text>
+
+      <!-- Build pipeline: plan_chunks -->
+      <rect x="60" y="320" width="160" height="80" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="140" y="348" fill="white" font-size="12" font-weight="600" text-anchor="middle">plan_chunks</text>
+      <text x="140" y="366" fill="#94a3b8" font-size="9" text-anchor="middle">src/vector/build.rs</text>
+      <text x="140" y="384" fill="#64748b" font-size="8" text-anchor="middle">from codegraph</text>
+
+      <!-- Build pipeline: existing_hashes -->
+      <rect x="250" y="320" width="180" height="80" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="340" y="348" fill="white" font-size="12" font-weight="600" text-anchor="middle">existing_hashes</text>
+      <text x="340" y="366" fill="#94a3b8" font-size="9" text-anchor="middle">src/vector/build.rs</text>
+      <text x="340" y="384" fill="#64748b" font-size="8" text-anchor="middle">text_hash reuse</text>
+
+      <!-- Build pipeline: compose_input -->
+      <rect x="460" y="320" width="180" height="80" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="550" y="348" fill="white" font-size="12" font-weight="600" text-anchor="middle">compose_input</text>
+      <text x="550" y="366" fill="#94a3b8" font-size="9" text-anchor="middle">src/vector/build.rs</text>
+      <text x="550" y="384" fill="#64748b" font-size="8" text-anchor="middle">input assembly</text>
+
+      <!-- Build pipeline: EmbedClient -->
+      <rect x="670" y="320" width="180" height="80" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="760" y="348" fill="white" font-size="12" font-weight="600" text-anchor="middle">EmbedClient</text>
+      <text x="760" y="366" fill="#94a3b8" font-size="9" text-anchor="middle">src/vector/build.rs</text>
+      <text x="760" y="384" fill="#64748b" font-size="8" text-anchor="middle">.embed(batch)</text>
+
+      <!-- Build pipeline: commit_build -->
+      <rect x="880" y="320" width="220" height="80" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="990" y="348" fill="white" font-size="12" font-weight="600" text-anchor="middle">commit_build</text>
+      <text x="990" y="366" fill="#94a3b8" font-size="9" text-anchor="middle">src/vector/build.rs · atomic</text>
+      <text x="990" y="384" fill="#64748b" font-size="8" text-anchor="middle">txn: GC + upsert + meta</text>
+
+      <!-- VectorStore (violet) -->
+      <rect x="100" y="460" width="380" height="110" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="290" y="490" fill="white" font-size="13" font-weight="600" text-anchor="middle">VectorStore</text>
+      <text x="290" y="508" fill="#94a3b8" font-size="9" text-anchor="middle">src/vector/store.rs</text>
+      <text x="290" y="528" fill="#94a3b8" font-size="8" text-anchor="middle">rusqlite Connection · WAL · open()</text>
+      <text x="290" y="544" fill="#94a3b8" font-size="8" text-anchor="middle">chunks · meta · descriptions</text>
+      <text x="290" y="560" fill="#64748b" font-size="7" text-anchor="middle">schema · upsert · load_all · text_hash · fp</text>
+
+      <!-- vectors.db (violet) -->
+      <rect x="100" y="640" width="380" height="80" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="290" y="670" fill="white" font-size="13" font-weight="600" text-anchor="middle">vectors.db</text>
+      <text x="290" y="688" fill="#94a3b8" font-size="9" text-anchor="middle">SQLite single file · persistent truth</text>
+      <text x="290" y="706" fill="#94a3b8" font-size="8" text-anchor="middle">.codesleuth/{fp}/index/ · BLOB vectors</text>
+
+      <!-- RecallEngine (violet) -->
+      <rect x="720" y="460" width="380" height="110" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="910" y="490" fill="white" font-size="13" font-weight="600" text-anchor="middle">RecallEngine</text>
+      <text x="910" y="508" fill="#94a3b8" font-size="9" text-anchor="middle">src/vector/recall.rs</text>
+      <text x="910" y="528" fill="#94a3b8" font-size="8" text-anchor="middle">load_all · cosine · MIN_HNSW_SIZE</text>
+      <text x="910" y="544" fill="#94a3b8" font-size="8" text-anchor="middle">recall(query, k) · format_recall_block</text>
+      <text x="910" y="560" fill="#64748b" font-size="7" text-anchor="middle">session-only · no disk writes</text>
+
+      <!-- HNSW Shadow Index (slate - in-memory) -->
+      <rect x="720" y="640" width="380" height="80" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="910" y="670" fill="white" font-size="13" font-weight="600" text-anchor="middle">HNSW Shadow Index</text>
+      <text x="910" y="688" fill="#94a3b8" font-size="9" text-anchor="middle">in-memory graph · non-persistent</text>
+      <text x="910" y="706" fill="#94a3b8" font-size="8" text-anchor="middle">fallback: brute-force cosine scan</text>
+
+      <!-- Arrow labels (on top, small) -->
+      <text x="320" y="155" fill="#94a3b8" font-size="8" text-anchor="middle">orchestrate</text>
+      <text x="640" y="435" fill="#34d399" font-size="8" text-anchor="middle">commit · atomic txn</text>
+      <text x="600" y="510" fill="#a78bfa" font-size="8" text-anchor="middle" font-weight="500">load_all · truth</text>
+      <text x="1000" y="430" fill="#22d3ee" font-size="8" text-anchor="middle">recall(q,k)</text>
+      <text x="970" y="158" fill="#94a3b8" font-size="8" text-anchor="middle">invoke tool</text>
+      <text x="540" y="42" fill="#fb7185" font-size="8" text-anchor="middle" font-weight="500">recall-first injection</text>
+      <text x="930" y="585" fill="#a78bfa" font-size="7" text-anchor="middle">build / query</text>
+
+      <!-- Legend (outside all region boundaries) -->
+      <g transform="translate(50, 800)">
+        <text x="0" y="0" font-size="9" fill="#94a3b8" font-weight="600" letter-spacing="0.5">LEGEND</text>
+        <rect x="65" y="-9" width="12" height="12" rx="2" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1"/>
+        <text x="83" y="1" font-size="9" fill="#cbd5e1">Entry / Tool</text>
+        <rect x="170" y="-9" width="12" height="12" rx="2" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1"/>
+        <text x="188" y="1" font-size="9" fill="#cbd5e1">Build / Orchestration</text>
+        <rect x="330" y="-9" width="12" height="12" rx="2" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1"/>
+        <text x="348" y="1" font-size="9" fill="#cbd5e1">Storage / Retrieval</text>
+        <rect x="480" y="-9" width="12" height="12" rx="2" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1"/>
+        <text x="498" y="1" font-size="9" fill="#cbd5e1">In-memory / External</text>
+        <rect x="630" y="-9" width="12" height="12" rx="2" fill="none" stroke="#fbbf24" stroke-width="1" stroke-dasharray="3,2"/>
+        <text x="648" y="1" font-size="9" fill="#cbd5e1">Region Boundary</text>
+        <line x1="780" y1="-3" x2="800" y2="-3" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="3,2"/>
+        <text x="808" y="1" font-size="9" fill="#cbd5e1">Recall-first</text>
+      </g>
+    </svg>
+  </div>
+
+  <!-- Summary cards -->
+  <div class="legend-grid">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-dot" style="background:#22d3ee"></div>
+        <h3>Entry · Tool</h3>
+      </div>
+      <ul>
+        <li>run_task (src/cli.rs) drives build + recall</li>
+        <li>VectorSearchTool exposed to LLM Agent</li>
+        <li>format_recall_block renders hits</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-dot" style="background:#34d399"></div>
+        <h3>Build · Orchestration</h3>
+      </div>
+      <ul>
+        <li>build_vector_index plans → embeds → commits</li>
+        <li>text_hash enables incremental upsert</li>
+        <li>commit_build wraps GC + upsert + meta in one txn</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-dot" style="background:#a78bfa"></div>
+        <h3>Truth · Shadow</h3>
+      </div>
+      <ul>
+        <li>vectors.db is the only persistent truth</li>
+        <li>HNSW rebuilt each session in memory</li>
+        <li>brute-force cosine fallback below threshold</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="footer">codesleuth · src/vector/{store,build,recall}.rs · single-file SQLite persistence · HNSW session shadow</div>
+</div>
+</body>
+</html>

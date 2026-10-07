@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>repo map budget injection · vector retrieval</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #020617; color: #e2e8f0; font-family: 'JetBrains Mono', monospace; min-height: 100vh; padding: 24px; }
+.container { max-width: 1100px; margin: 0 auto; }
+.header { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; padding: 4px 8px; }
+.pulse-dot { width: 10px; height: 10px; border-radius: 50%; background: #34d399; animation: pulse 2s infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.4); } 50% { opacity: 0.7; box-shadow: 0 0 0 8px rgba(52, 211, 153, 0); } }
+.title { font-size: 15px; font-weight: 600; color: #f1f5f9; }
+.subtitle { font-size: 10px; color: #64748b; margin-left: auto; }
+.diagram-card { background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; padding: 16px; margin-bottom: 18px; }
+.cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 14px; }
+.card { background: #0f172a; border: 1px solid #1e293b; border-radius: 8px; padding: 14px; }
+.card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.card-dot { width: 8px; height: 8px; border-radius: 50%; }
+.card h3 { font-size: 11px; font-weight: 600; color: #f1f5f9; letter-spacing: 0.5px; }
+.card ul { list-style: none; font-size: 10px; color: #94a3b8; line-height: 1.6; }
+.card li::before { content: "› "; color: #475569; }
+.footer { text-align: center; font-size: 9px; color: #475569; padding-top: 8px; letter-spacing: 0.3px; }
+svg text { font-family: 'JetBrains Mono', monospace; }
+</style>
+</head>
+<body>
+<div class="container" id="report-container">
+  <div class="header">
+    <div class="pulse-dot"></div>
+    <div class="title">repo map budget injection · vector retrieval</div>
+    <div class="subtitle">src/vector/repomap.rs · src/cli.rs · src/harness.rs</div>
+  </div>
+
+  <div class="diagram-card">
+    <svg viewBox="0 0 1000 720" xmlns="http://www.w3.org/2000/svg" width="100%">
+      <defs>
+        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+          <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+        </pattern>
+        <marker id="ah" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
+        </marker>
+        <marker id="ah-rose" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#fb7185"/>
+        </marker>
+      </defs>
+
+      <rect width="1000" height="720" fill="#020617"/>
+      <rect width="1000" height="720" fill="url(#grid)"/>
+
+      <line x1="150" y1="140" x2="150" y2="178" stroke="#64748b" stroke-width="1.5" marker-end="url(#ah)"/>
+      <text x="158" y="162" fill="#94a3b8" font-size="8">budget</text>
+
+      <path d="M 240 130 C 280 130, 320 170, 320 178" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#ah)"/>
+      <text x="275" y="152" fill="#94a3b8" font-size="8">budget</text>
+
+      <path d="M 620 112 C 400 112, 150 160, 150 178" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#ah)"/>
+      <text x="370" y="120" fill="#94a3b8" font-size="8">flags</text>
+
+      <path d="M 720 140 C 600 140, 500 160, 430 178" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#ah)"/>
+      <text x="555" y="152" fill="#94a3b8" font-size="8">entry</text>
+
+      <line x1="150" y1="237" x2="150" y2="278" stroke="#64748b" stroke-width="1.5" marker-end="url(#ah)"/>
+      <text x="158" y="262" fill="#94a3b8" font-size="8">calls</text>
+
+      <line x1="430" y1="237" x2="430" y2="278" stroke="#64748b" stroke-width="1.5" marker-end="url(#ah)"/>
+      <text x="438" y="262" fill="#94a3b8" font-size="8">calls</text>
+
+      <line x1="242" y1="317" x2="618" y2="317" stroke="#64748b" stroke-width="1.5" marker-end="url(#ah)"/>
+      <text x="320" y="310" fill="#94a3b8" font-size="8">reads symbols + edges</text>
+
+      <line x1="430" y1="357" x2="430" y2="393" stroke="#64748b" stroke-width="1.5" marker-end="url(#ah)"/>
+      <text x="438" y="378" fill="#94a3b8" font-size="8">neighbors</text>
+
+      <line x1="720" y1="357" x2="720" y2="393" stroke="#64748b" stroke-width="1.5" marker-end="url(#ah)"/>
+      <text x="728" y="378" fill="#94a3b8" font-size="8">SQL</text>
+
+      <path d="M 150 357 C 150 430, 200 470, 230 498" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#ah)"/>
+      <text x="88" y="430" fill="#94a3b8" font-size="8">map text</text>
+
+      <path d="M 430 357 C 430 430, 370 470, 350 498" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#ah)"/>
+      <text x="392" y="452" fill="#94a3b8" font-size="8">map text</text>
+
+      <line x1="392" y1="527" x2="448" y2="527" stroke="#64748b" stroke-width="1.5" marker-end="url(#ah)"/>
+      <text x="400" y="520" fill="#94a3b8" font-size="8">suffix</text>
+
+      <line x1="652" y1="527" x2="708" y2="527" stroke="#64748b" stroke-width="1.5" marker-end="url(#ah)"/>
+      <text x="660" y="520" fill="#94a3b8" font-size="8">inject</text>
+
+      <path d="M 80 237 C 40 290, 40 350, 100 393" stroke="#fb7185" stroke-width="1.5" fill="none" stroke-dasharray="4,4" marker-end="url(#ah-rose)"/>
+      <text x="95" y="250" fill="#fb7185" font-size="8">degraded</text>
+
+      <path d="M 360 237 C 280 290, 200 360, 180 393" stroke="#fb7185" stroke-width="1.5" fill="none" stroke-dasharray="4,4" marker-end="url(#ah-rose)"/>
+      <text x="300" y="305" fill="#fb7185" font-size="8">degraded</text>
+
+      <rect x="60" y="85" width="180" height="55" fill="#0f172a"/>
+      <rect x="60" y="85" width="180" height="55" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="150" y="107" fill="white" font-size="12" font-weight="600" text-anchor="middle">Config</text>
+      <text x="150" y="122" fill="#94a3b8" font-size="9" text-anchor="middle">vector.repomap_budget</text>
+      <text x="150" y="134" fill="#64748b" font-size="7" text-anchor="middle">config.rs:99 · 137 · 437-444</text>
+
+      <rect x="620" y="85" width="200" height="55" fill="#0f172a"/>
+      <rect x="620" y="85" width="200" height="55" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="720" y="107" fill="white" font-size="12" font-weight="600" text-anchor="middle">src/cli.rs main</text>
+      <text x="720" y="122" fill="#94a3b8" font-size="9" text-anchor="middle">cli.rs:304-314</text>
+      <text x="720" y="134" fill="#64748b" font-size="7" text-anchor="middle">main flow entry</text>
+
+      <rect x="60" y="180" width="180" height="55" fill="#0f172a"/>
+      <rect x="60" y="180" width="180" height="55" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="150" y="202" fill="white" font-size="12" font-weight="600" text-anchor="middle">--repo-map flag</text>
+      <text x="150" y="217" fill="#94a3b8" font-size="9" text-anchor="middle">cli.rs:340-346</text>
+      <text x="150" y="229" fill="#64748b" font-size="7" text-anchor="middle">non-vector path</text>
+
+      <rect x="320" y="180" width="220" height="55" fill="#0f172a"/>
+      <rect x="320" y="180" width="220" height="55" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="430" y="202" fill="white" font-size="12" font-weight="600" text-anchor="middle">setup_vector_layer</text>
+      <text x="430" y="217" fill="#94a3b8" font-size="9" text-anchor="middle">cli.rs:306 · 619-658</text>
+      <text x="430" y="229" fill="#64748b" font-size="7" text-anchor="middle">vector path</text>
+
+      <rect x="60" y="280" width="180" height="75" fill="#0f172a"/>
+      <rect x="60" y="280" width="180" height="75" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="150" y="302" fill="white" font-size="12" font-weight="600" text-anchor="middle">build_repo_map</text>
+      <text x="150" y="317" fill="#94a3b8" font-size="9" text-anchor="middle">repomap.rs:137-178</text>
+      <text x="150" y="332" fill="#64748b" font-size="7" text-anchor="middle">degree-desc sort</text>
+      <text x="150" y="345" fill="#64748b" font-size="7" text-anchor="middle">budget greedy fill</text>
+
+      <rect x="320" y="280" width="220" height="75" fill="#0f172a"/>
+      <rect x="320" y="280" width="220" height="75" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="430" y="302" fill="white" font-size="12" font-weight="600" text-anchor="middle">build_task_map</text>
+      <text x="430" y="317" fill="#94a3b8" font-size="9" text-anchor="middle">repomap.rs:67-135</text>
+      <text x="430" y="332" fill="#64748b" font-size="7" text-anchor="middle">seeds + neighbors + degree</text>
+      <text x="430" y="345" fill="#64748b" font-size="7" text-anchor="middle">budget greedy fill</text>
+
+      <rect x="620" y="280" width="200" height="75" fill="#0f172a"/>
+      <rect x="620" y="280" width="200" height="75" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="720" y="302" fill="white" font-size="12" font-weight="600" text-anchor="middle">repo_map_inputs</text>
+      <text x="720" y="317" fill="#94a3b8" font-size="9" text-anchor="middle">repomap.rs:22-65</text>
+      <text x="720" y="332" fill="#64748b" font-size="7" text-anchor="middle">SELECT symbols + edges</text>
+      <text x="720" y="345" fill="#64748b" font-size="7" text-anchor="middle">accumulate degree</text>
+
+      <rect x="320" y="395" width="220" height="55" fill="#0f172a"/>
+      <rect x="320" y="395" width="220" height="55" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="430" y="417" fill="white" font-size="12" font-weight="600" text-anchor="middle">relations_for_symbol</text>
+      <text x="430" y="431" fill="#94a3b8" font-size="9" text-anchor="middle">vector::chunk · cli.rs:638</text>
+      <text x="430" y="444" fill="#64748b" font-size="7" text-anchor="middle">callers + callees (推断)</text>
+
+      <rect x="620" y="395" width="200" height="75" fill="#0f172a"/>
+      <rect x="620" y="395" width="200" height="75" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="720" y="417" fill="white" font-size="12" font-weight="600" text-anchor="middle">CodeGraph SQLite</text>
+      <text x="720" y="432" fill="#94a3b8" font-size="9" text-anchor="middle">7 node kinds</text>
+      <text x="720" y="447" fill="#64748b" font-size="7" text-anchor="middle">function / method / struct /</text>
+      <text x="720" y="459" fill="#64748b" font-size="7" text-anchor="middle">class / interface / impl / trait</text>
+
+      <rect x="60" y="395" width="180" height="55" fill="#0f172a"/>
+      <rect x="60" y="395" width="180" height="55" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,4"/>
+      <text x="150" y="417" fill="white" font-size="12" font-weight="600" text-anchor="middle">Audit · degraded</text>
+      <text x="150" y="431" fill="#94a3b8" font-size="9" text-anchor="middle">tracing::warn</text>
+      <text x="150" y="444" fill="#64748b" font-size="7" text-anchor="middle">cli.rs:348-356 · 655-657</text>
+
+      <rect x="190" y="500" width="200" height="55" fill="#0f172a"/>
+      <rect x="190" y="500" width="200" height="55" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="290" y="522" fill="white" font-size="12" font-weight="600" text-anchor="middle">wrap_repo_section</text>
+      <text x="290" y="536" fill="#94a3b8" font-size="9" text-anchor="middle">repomap.rs:180-183</text>
+      <text x="290" y="549" fill="#64748b" font-size="7" text-anchor="middle">[repo map] prefix + suffix</text>
+
+      <rect x="450" y="500" width="200" height="55" fill="#0f172a"/>
+      <rect x="450" y="500" width="200" height="55" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="550" y="522" fill="white" font-size="12" font-weight="600" text-anchor="middle">with_first_user_suffix</text>
+      <text x="550" y="536" fill="#94a3b8" font-size="9" text-anchor="middle">cli.rs:367-371</text>
+      <text x="550" y="549" fill="#64748b" font-size="7" text-anchor="middle">Harness builder</text>
+
+      <rect x="710" y="500" width="200" height="55" fill="#0f172a"/>
+      <rect x="710" y="500" width="200" height="55" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="810" y="522" fill="white" font-size="12" font-weight="600" text-anchor="middle">Harness</text>
+      <text x="810" y="536" fill="#94a3b8" font-size="9" text-anchor="middle">harness.rs:74-88</text>
+      <text x="810" y="549" fill="#64748b" font-size="7" text-anchor="middle">User msg last_mut + suffix</text>
+
+      <rect x="60" y="595" width="880" height="105" fill="#0f172a"/>
+      <rect x="60" y="595" width="880" height="105" rx="6" fill="rgba(30,41,59,0.5)" stroke="#334155" stroke-width="1"/>
+      <text x="80" y="615" fill="#f1f5f9" font-size="11" font-weight="600" letter-spacing="0.5">LEGEND</text>
+
+      <rect x="80" y="630" width="14" height="14" rx="3" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.2"/>
+      <text x="102" y="641" fill="#cbd5e1" font-size="9">External / Config</text>
+
+      <rect x="220" y="630" width="14" height="14" rx="3" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+      <text x="242" y="641" fill="#cbd5e1" font-size="9">CLI flag</text>
+
+      <rect x="310" y="630" width="14" height="14" rx="3" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+      <text x="332" y="641" fill="#cbd5e1" font-size="9">Backend module</text>
+
+      <rect x="450" y="630" width="14" height="14" rx="3" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.2"/>
+      <text x="472" y="641" fill="#cbd5e1" font-size="9">Database</text>
+
+      <rect x="560" y="630" width="14" height="14" rx="3" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.2" stroke-dasharray="3,2"/>
+      <text x="582" y="641" fill="#cbd5e1" font-size="9">Security / degraded</text>
+
+      <line x1="730" y1="637" x2="760" y2="637" stroke="#64748b" stroke-width="1.5" marker-end="url(#ah)"/>
+      <text x="768" y="641" fill="#cbd5e1" font-size="9">call / data flow</text>
+
+      <line x1="80" y1="668" x2="110" y2="668" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#ah-rose)"/>
+      <text x="120" y="671" fill="#cbd5e1" font-size="9">degraded fallback</text>
+
+      <text x="300" y="671" fill="#64748b" font-size="8">budget = 24_000 · per-line cap = 200 · D005 layer → User msg (not system)</text>
+    </svg>
+  </div>
+
+  <div class="cards">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-dot" style="background:#22d3ee"></div>
+        <h3>ENTRY POINTS</h3>
+      </div>
+      <ul>
+        <li>src/cli.rs main flow · 304-314</li>
+        <li>--repo-map flag · 340-346</li>
+        <li>setup_vector_layer · 306, 619</li>
+        <li>Config.vector.repomap_budget = 24_000</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-dot" style="background:#34d399"></div>
+        <h3>CORE BUILDERS</h3>
+      </div>
+      <ul>
+        <li>build_repo_map · repomap.rs:137-178</li>
+        <li>build_task_map · repomap.rs:67-135</li>
+        <li>repo_map_inputs · repomap.rs:22-65</li>
+        <li>relations_for_symbol · vector::chunk</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-dot" style="background:#a78bfa"></div>
+        <h3>INJECTION TARGET</h3>
+      </div>
+      <ul>
+        <li>wrap_repo_section · 180-183</li>
+        <li>with_first_user_suffix · 367-371</li>
+        <li>Harness · harness.rs:74-88</li>
+        <li>degraded → tracing::warn + audit</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="footer">codesleuth · 2026-10-07 · repo map 预算注入 · vector retrieval</div>
+</div>
+</body>
+</html>

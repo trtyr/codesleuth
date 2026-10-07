@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Context Compression Architecture — codesleuth D013 v2</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    background: #020617;
+    color: #e2e8f0;
+    padding: 24px;
+    min-height: 100vh;
+  }
+  #report-container {
+    max-width: 1080px;
+    margin: 0 auto;
+    background: #0f172a;
+    border: 1px solid #1e293b;
+    border-radius: 12px;
+    padding: 24px;
+  }
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 18px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid #1e293b;
+  }
+  .pulse-dot {
+    width: 10px;
+    height: 10px;
+    background: #34d399;
+    border-radius: 50%;
+    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.6);
+    animation: pulse 2s infinite;
+    flex-shrink: 0;
+  }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.6); }
+    70% { box-shadow: 0 0 0 8px rgba(52, 211, 153, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
+  }
+  .header-text h1 {
+    font-size: 15px;
+    font-weight: 600;
+    color: white;
+    letter-spacing: 0.2px;
+  }
+  .header-text p {
+    font-size: 10px;
+    color: #94a3b8;
+    margin-top: 3px;
+  }
+  .diagram {
+    background: #020617;
+    border: 1px solid #1e293b;
+    border-radius: 8px;
+    padding: 8px;
+    overflow: auto;
+  }
+  svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+  .footer {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid #1e293b;
+    font-size: 8px;
+    color: #64748b;
+    display: flex;
+    justify-content: space-between;
+  }
+</style>
+</head>
+<body>
+<div id="report-container">
+  <div class="header">
+    <div class="pulse-dot"></div>
+    <div class="header-text">
+      <h1>Context Compression — codesleuth D013 v2</h1>
+      <p>Deterministic three-phase compaction driven by Harness::run · zero-LLM handoff · audit-traced recall</p>
+    </div>
+  </div>
+  <div class="diagram">
+    <svg viewBox="0 0 1000 820" xmlns="http://www.w3.org/2000/svg" width="1000" height="820">
+      <defs>
+        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+          <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+        </pattern>
+        <marker id="ah" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
+        </marker>
+        <marker id="ah-cyan" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#22d3ee"/>
+        </marker>
+        <marker id="ah-emerald" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#34d399"/>
+        </marker>
+        <marker id="ah-amber" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#fbbf24"/>
+        </marker>
+        <marker id="ah-violet" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#a78bfa"/>
+        </marker>
+        <marker id="ah-slate" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#94a3b8"/>
+        </marker>
+      </defs>
+
+      <!-- 1. background -->
+      <rect width="1000" height="820" fill="#020617"/>
+      <rect width="1000" height="820" fill="url(#grid)"/>
+
+      <!-- 2. arrows (rendered behind components) -->
+      <g id="arrows" fill="none" stroke-width="1.5">
+        <!-- A1: HarnessConfig -> Harness::run -->
+        <path d="M 240 160 L 286 160" stroke="#22d3ee" marker-end="url(#ah-cyan)"/>
+        <!-- A2: KEEP_RECENT -> compact -->
+        <path d="M 240 247 C 258 247 258 505 286 505" stroke="#94a3b8" marker-end="url(#ah-slate)"/>
+        <!-- A3: Harness::run -> compact_threshold_tokens -->
+        <path d="M 500 200 L 500 216" stroke="#34d399" marker-end="url(#ah-emerald)"/>
+        <!-- A4: compact_threshold_tokens -> should_compact -->
+        <path d="M 500 275 L 500 291" stroke="#94a3b8" marker-end="url(#ah-slate)"/>
+        <!-- A5: should_compact -> build_handoff -->
+        <path d="M 500 350 L 500 366" stroke="#fbbf24" marker-end="url(#ah-amber)"/>
+        <!-- A6: build_handoff -> compact -->
+        <path d="M 500 440 L 500 456" stroke="#34d399" marker-end="url(#ah-emerald)"/>
+        <!-- A7: compact -> audit -->
+        <path d="M 500 550 L 500 566" stroke="#34d399" marker-end="url(#ah-emerald)"/>
+        <!-- A8: audit -> ~/.codesleuth/ (write) -->
+        <path d="M 290 600 C 278 600 270 625 244 632" stroke="#a78bfa" marker-end="url(#ah-violet)"/>
+        <!-- A9: audit -> recall tool (read seq range) -->
+        <path d="M 710 600 C 740 595 745 480 758 412" stroke="#a78bfa" marker-end="url(#ah-violet)"/>
+        <!-- A10: recall tool -> recall_message -->
+        <path d="M 860 440 L 860 456" stroke="#34d399" marker-end="url(#ah-emerald)"/>
+        <!-- A11: recall_message -> next run -->
+        <path d="M 860 530 L 860 566" stroke="#34d399" marker-end="url(#ah-emerald)"/>
+        <!-- A12: D013 spec -> should_compact (governance) -->
+        <path d="M 240 510 C 285 510 285 330 286 322" stroke="#fbbf24" stroke-dasharray="4,4" marker-end="url(#ah-amber)"/>
+      </g>
+
+      <!-- 3. Region boundary: Harness::run compression core -->
+      <rect x="270" y="90" width="460" height="560" rx="12" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="8,4" opacity="0.65"/>
+      <text x="500" y="82" fill="#fbbf24" font-size="9" font-weight="600" text-anchor="middle" letter-spacing="1.5">HARNESS::RUN COMPRESSION CORE</text>
+
+      <!-- 4. Components -->
+
+      <!-- HarnessConfig -->
+      <rect x="40" y="120" width="200" height="80" rx="6" fill="#0f172a"/>
+      <rect x="40" y="120" width="200" height="80" rx="6" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="140" y="142" fill="white" font-size="11" font-weight="600" text-anchor="middle">HarnessConfig</text>
+      <text x="140" y="160" fill="#94a3b8" font-size="9" text-anchor="middle">context_tokens</text>
+      <text x="140" y="174" fill="#94a3b8" font-size="9" text-anchor="middle">compact_percent</text>
+      <text x="140" y="192" fill="#64748b" font-size="8" text-anchor="middle">src/harness.rs:60-64</text>
+
+      <!-- KEEP_RECENT constant -->
+      <rect x="40" y="220" width="200" height="55" rx="6" fill="#0f172a"/>
+      <rect x="40" y="220" width="200" height="55" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="140" y="240" fill="white" font-size="11" font-weight="600" text-anchor="middle">KEEP_RECENT = 6</text>
+      <text x="140" y="256" fill="#94a3b8" font-size="9" text-anchor="middle">tail window constant</text>
+      <text x="140" y="268" fill="#64748b" font-size="8" text-anchor="middle">src/context.rs:8-9</text>
+
+      <!-- D013 Decision Doc -->
+      <rect x="40" y="470" width="200" height="80" rx="6" fill="#0f172a"/>
+      <rect x="40" y="470" width="200" height="80" rx="6" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="4,4"/>
+      <text x="140" y="490" fill="white" font-size="11" font-weight="600" text-anchor="middle">D013 Decision</text>
+      <text x="140" y="508" fill="#94a3b8" font-size="9" text-anchor="middle">three-phase timing</text>
+      <text x="140" y="522" fill="#94a3b8" font-size="9" text-anchor="middle">"window is physical"</text>
+      <text x="140" y="540" fill="#64748b" font-size="7" text-anchor="middle">013-compaction-v2-report-persistence.md:15-18</text>
+
+      <!-- ~/.codesleuth/ state -->
+      <rect x="40" y="580" width="200" height="100" rx="6" fill="#0f172a"/>
+      <rect x="40" y="580" width="200" height="100" rx="6" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="140" y="600" fill="white" font-size="11" font-weight="600" text-anchor="middle">~/.codesleuth/</text>
+      <text x="140" y="620" fill="#94a3b8" font-size="9" text-anchor="middle">reports/</text>
+      <text x="140" y="636" fill="#94a3b8" font-size="9" text-anchor="middle">audit/  (compaction events)</text>
+      <text x="140" y="652" fill="#94a3b8" font-size="9" text-anchor="middle">ledger/  eval/</text>
+      <text x="140" y="672" fill="#64748b" font-size="8" text-anchor="middle">AGENTS.md:11,14</text>
+
+      <!-- Harness::run -->
+      <rect x="290" y="120" width="420" height="80" rx="6" fill="#0f172a"/>
+      <rect x="290" y="120" width="420" height="80" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="500" y="142" fill="white" font-size="12" font-weight="600" text-anchor="middle">Harness::run</text>
+      <text x="500" y="160" fill="#94a3b8" font-size="9" text-anchor="middle">main loop driver — per-turn compression trigger</text>
+      <text x="500" y="174" fill="#94a3b8" font-size="9" text-anchor="middle">carries RunOutcome { Report, answer, turns, tool_calls, audit_path }</text>
+      <text x="500" y="192" fill="#64748b" font-size="8" text-anchor="middle">src/harness.rs:25-44, 74, 100-109</text>
+
+      <!-- compact_threshold_tokens -->
+      <rect x="290" y="220" width="420" height="55" rx="6" fill="#0f172a"/>
+      <rect x="290" y="220" width="420" height="55" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="500" y="240" fill="white" font-size="11" font-weight="600" text-anchor="middle">compact_threshold_tokens</text>
+      <text x="500" y="256" fill="#94a3b8" font-size="9" text-anchor="middle">model_context_window × compact_percent  (cap 100)</text>
+      <text x="500" y="268" fill="#64748b" font-size="8" text-anchor="middle">src/context.rs:30-33, 109-114</text>
+
+      <!-- should_compact -->
+      <rect x="290" y="295" width="420" height="55" rx="6" fill="#0f172a"/>
+      <rect x="290" y="295" width="420" height="55" rx="6" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+      <text x="500" y="315" fill="white" font-size="11" font-weight="600" text-anchor="middle">should_compact</text>
+      <text x="500" y="331" fill="#94a3b8" font-size="9" text-anchor="middle">current_tokens ≥ threshold  →  trigger three-phase flow</text>
+      <text x="500" y="345" fill="#64748b" font-size="8" text-anchor="middle">src/harness.rs:102</text>
+
+      <!-- build_handoff (Phase 1) -->
+      <rect x="290" y="370" width="420" height="70" rx="6" fill="#0f172a"/>
+      <rect x="290" y="370" width="420" height="70" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="500" y="390" fill="white" font-size="11" font-weight="600" text-anchor="middle">build_handoff  ·  Phase 1</text>
+      <text x="500" y="406" fill="#94a3b8" font-size="9" text-anchor="middle">deterministic, zero-LLM assembly</text>
+      <text x="500" y="420" fill="#94a3b8" font-size="9" text-anchor="middle">task restate · recall range · next-step guide</text>
+      <text x="500" y="434" fill="#64748b" font-size="8" text-anchor="middle">src/context.rs:44-54 · harness.rs:104-107</text>
+
+      <!-- compact (Phase 2) -->
+      <rect x="290" y="460" width="420" height="90" rx="6" fill="#0f172a"/>
+      <rect x="290" y="460" width="420" height="90" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="500" y="482" fill="white" font-size="11" font-weight="600" text-anchor="middle">compact  ·  Phase 2  (pure fn)</text>
+      <text x="500" y="500" fill="#94a3b8" font-size="9" text-anchor="middle">head(2) + handoff User + tail(KEEP_RECENT)</text>
+      <text x="500" y="514" fill="#94a3b8" font-size="9" text-anchor="middle">tool/assistant pairing fallback — never split</text>
+      <text x="500" y="528" fill="#94a3b8" font-size="9" text-anchor="middle">returns (new_context, evicted_count)</text>
+      <text x="500" y="544" fill="#64748b" font-size="8" text-anchor="middle">src/context.rs:56-82, 131-195</text>
+
+      <!-- audit events (Phase 3) -->
+      <rect x="290" y="570" width="420" height="60" rx="6" fill="#0f172a"/>
+      <rect x="290" y="570" width="420" height="60" rx="6" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="500" y="590" fill="white" font-size="11" font-weight="600" text-anchor="middle">compaction_begin / compaction  ·  Phase 3</text>
+      <text x="500" y="606" fill="#94a3b8" font-size="9" text-anchor="middle">written only when evicted_count &gt; 0  (no-op silent otherwise)</text>
+      <text x="500" y="622" fill="#64748b" font-size="8" text-anchor="middle">src/harness.rs:110-123</text>
+
+      <!-- recall tool -->
+      <rect x="760" y="370" width="200" height="70" rx="6" fill="#0f172a"/>
+      <rect x="760" y="370" width="200" height="70" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="860" y="390" fill="white" font-size="11" font-weight="600" text-anchor="middle">recall tool</text>
+      <text x="860" y="406" fill="#94a3b8" font-size="9" text-anchor="middle">read evicted content by</text>
+      <text x="860" y="420" fill="#94a3b8" font-size="9" text-anchor="middle">audit seq range</text>
+      <text x="860" y="434" fill="#64748b" font-size="8" text-anchor="middle">src/harness.rs:288, 1020</text>
+
+      <!-- recall_message -->
+      <rect x="760" y="460" width="200" height="70" rx="6" fill="#0f172a"/>
+      <rect x="760" y="460" width="200" height="70" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="860" y="480" fill="white" font-size="11" font-weight="600" text-anchor="middle">recall_message</text>
+      <text x="860" y="496" fill="#94a3b8" font-size="9" text-anchor="middle">wrap audit lines as</text>
+      <text x="860" y="510" fill="#94a3b8" font-size="9" text-anchor="middle">User message (seq-asc)</text>
+      <text x="860" y="524" fill="#64748b" font-size="8" text-anchor="middle">src/context.rs:84-94</text>
+
+      <!-- next turn loop indicator -->
+      <rect x="760" y="570" width="200" height="60" rx="6" fill="#0f172a"/>
+      <rect x="760" y="570" width="200" height="60" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="4,4"/>
+      <text x="860" y="590" fill="white" font-size="11" font-weight="600" text-anchor="middle">next Harness::run</text>
+      <text x="860" y="606" fill="#94a3b8" font-size="9" text-anchor="middle">re-injected User msg</text>
+      <text x="860" y="620" fill="#94a3b8" font-size="9" text-anchor="middle">loop continues</text>
+
+      <!-- 5. Arrow labels -->
+      <g font-size="8" font-family="JetBrains Mono, monospace">
+        <text x="263" y="154" fill="#22d3ee" text-anchor="middle">config</text>
+        <text x="252" y="380" fill="#94a3b8" text-anchor="middle">const</text>
+        <text x="540" y="287" fill="#94a3b8" text-anchor="start">threshold</text>
+        <text x="540" y="362" fill="#fbbf24" text-anchor="start">yes</text>
+        <text x="540" y="452" fill="#34d399" text-anchor="start">handoff</text>
+        <text x="540" y="562" fill="#34d399" text-anchor="start">evicted &gt; 0</text>
+        <text x="268" y="618" fill="#a78bfa" text-anchor="middle">write</text>
+        <text x="730" y="500" fill="#a78bfa" text-anchor="end">read seq range</text>
+        <text x="905" y="554" fill="#34d399" text-anchor="start">User msg</text>
+        <text x="282" y="420" fill="#fbbf24" text-anchor="end">D013 spec</text>
+      </g>
+
+      <!-- 6. Legend (outside region boundary, below lowest box) -->
+      <g id="legend">
+        <rect x="40" y="700" width="920" height="100" rx="6" fill="#0f172a" stroke="#1e293b" stroke-width="1"/>
+        <text x="60" y="720" fill="white" font-size="10" font-weight="600" letter-spacing="0.5">LEGEND</text>
+
+        <rect x="60" y="735" width="14" height="14" rx="3" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="80" y="746" fill="#94a3b8" font-size="9">Backend core (Harness::run, build_handoff, compact, recall)</text>
+
+        <rect x="60" y="755" width="14" height="14" rx="3" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="80" y="766" fill="#94a3b8" font-size="9">Configuration (HarnessConfig)</text>
+
+        <rect x="60" y="775" width="14" height="14" rx="3" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="80" y="786" fill="#94a3b8" font-size="9">Decision / spec (should_compact, D013)</text>
+
+        <rect x="500" y="735" width="14" height="14" rx="3" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="520" y="746" fill="#94a3b8" font-size="9">Audit / persistence (compaction events, ~/.codesleuth/)</text>
+
+        <rect x="500" y="755" width="14" height="14" rx="3" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="520" y="766" fill="#94a3b8" font-size="9">External / constant (KEEP_RECENT, threshold fn, next-run)</text>
+
+        <rect x="500" y="775" width="14" height="14" rx="3" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="8,4"/>
+        <text x="520" y="786" fill="#94a3b8" font-size="9">Region boundary (Harness::run core)</text>
+
+        <line x1="60" y1="800" x2="92" y2="800" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah-emerald)"/>
+        <text x="100" y="804" fill="#94a3b8" font-size="9">data flow</text>
+
+        <line x1="200" y1="800" x2="232" y2="800" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah-violet)"/>
+        <text x="240" y="804" fill="#94a3b8" font-size="9">audit read/write</text>
+
+        <line x1="360" y1="800" x2="392" y2="800" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#ah-amber)"/>
+        <text x="400" y="804" fill="#94a3b8" font-size="9">governance / control</text>
+
+        <line x1="540" y1="800" x2="572" y2="800" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah-cyan)"/>
+        <text x="580" y="804" fill="#94a3b8" font-size="9">config input</text>
+
+        <line x1="680" y1="800" x2="712" y2="800" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#ah-slate)"/>
+        <text x="720" y="804" fill="#94a3b8" font-size="9">constant / utility</text>
+      </g>
+    </svg>
+  </div>
+  <div class="footer">
+    <span>codesleuth · D013 v2 context compression</span>
+    <span>src/harness.rs · src/context.rs · 013-compaction-v2-report-persistence.md</span>
+  </div>
+</div>
+</body>
+</html>
