@@ -35,7 +35,7 @@ def run_one_question(codesleuth_bin: str, question: str, fixture_dir: str, extra
     """跑一题。返回 (report | None, audit_path | None, stderr_text, returncode, duration_ms)。"""
     started = time.monotonic()
     proc = subprocess.run(
-        [codesleuth_bin, question, "--repo", fixture_dir, "--json", *(extra_args or [])],
+        [codesleuth_bin, question, "--repo", fixture_dir, "--output-format", "json", *(extra_args or [])],
         capture_output=True,
         text=True,
         timeout=QUESTION_TIMEOUT,
