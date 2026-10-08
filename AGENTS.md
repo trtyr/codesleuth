@@ -41,6 +41,28 @@ python3 scripts/eval/run_eval.py \
 - 本仓公开口径：事实权威 = README + 代码与模块头注释（带设计决策编号 D0xx，注释即决策摘要）。
 - 方案原文（solution-map / decisions D001-D014 / eval 判分规格）在作者本地规划态 `docs/plantree/`（.gitignore 排除，**不随仓分发**）——仓内代理按代码与注释自洽理解，勿按图索骥外部路径。
 
+## engram 档案索引（2026-10-07 docs-upload 落地）
+
+- 本项目 = engram project `codesleuth`（id `01a11563-23b0-7eb1-86ac-26598386c52c`，11 分类）；
+  codegraph `codesleuth`（head `d980b9ccddaf`，查询前看 freshness，stale 先 sync）
+- 文档清单（title → category，doc_search/doc_get 直达）：
+  - 00-overview → 总览
+  - 01-cli-dispatch / 02-config-cmd / 03-index-cmd → CLI与命令层
+  - 01-llm-provider / 02-config-loading → LLM与配置
+  - 01-context-compaction / 02-report → 上下文与报告
+  - 01-harness / 02-system-prompt → 侦察编排
+  - 01-tool-registry / 02-read-tool / 03-fuzzy-search / 04-vector-search-tool → 只读工具面
+  - 01-vector-embed / 02-vector-chunk / 03-vector-store / 04-vector-recall / 05-vector-compose / 06-repo-map → 向量检索
+  - 01-fence / 02-bootlock / 03-writeguard / 04-audit / 05-evidence → 安全与防护
+  - 01-graph-tools / 02-mcp-client → 结构图与MCP
+  - 01-error-codes / 02-logging → 错误与日志
+  - 开工记录 2026-10-07 → 历史（文档基线 cd0b0d5）
+- 图清单（projects 文件区，file_get 直取）：`diagram-00-architecture.html`（全局架构）
+  + `diagram-01` ~ `diagram-28`（逐篇配图，序号对应上方文档）
+- 检索配方：架构怎么设计 → 00-overview + 侦察编排；一个工具怎么实现 → 只读工具面/向量检索；
+  为什么这么定 → docs/plantree（本地）+ 模块头注释 D0xx；报错码什么意思 → 错误与日志
+- 更新纪律：文档清单变化时同步更新本段（本段是快照，权威在 engram）
+
 ## 约定
 
 - 错误一律走 `errors::CsError`（CS 码 + hint + retryable）；exit code 由码段决定（`CsCode::exit_code`）。
