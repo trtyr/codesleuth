@@ -101,8 +101,10 @@ codesleuth "鉴权中间件在哪，被哪些路由使用？" --repo /path/to/pr
 # 机器可读 JSON（schema 版本化，供上游 agent 消费）
 codesleuth "错误处理有哪些模式？" --repo . --output-format json --out report.json
 
-# 上游编排场景：raw 交付 + 输出契约（回答必须含指定标记，缺失补一轮仍缺则判 CS2005）
-codesleuth "整理功能清单" --repo . --output-format raw --require "<!--FEATURE-INDEX-->"
+# 上游编排场景：raw 交付 + 输出契约（--require 逐字包含 / --require-line 独占行首，防一行流糊弄；
+# 缺失自动补一轮修复，仍缺判 CS2005）
+codesleuth "整理功能清单" --repo . --output-format raw \
+  --require-line "<!--FEATURE-INDEX-->" --require-line "```feature-index"
 
 # 多模型档位：--profile 选用 [llm.profiles.<名字>]；--model/--base-url 旗标仍可再压
 codesleuth "这个模块的测试覆盖如何？" --repo . --profile review

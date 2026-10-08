@@ -52,6 +52,9 @@ pub struct Cli {
     /// 输出契约（D021）：最终回答必须逐字包含的标记，可多次；缺失补一轮仍缺则判 CS2005
     #[arg(long = "require", value_name = "MARKER")]
     pub require: Vec<String>,
+    /// 输出契约·行首锚定（D022）：标记必须独占某行行首（防一行流糊弄），可多次
+    #[arg(long = "require-line", value_name = "MARKER")]
+    pub require_line: Vec<String>,
     /// 启用 repo map 预算化注入（P003 E2）
     #[arg(long)]
     pub repo_map: bool,
@@ -399,10 +402,19 @@ impl Cli {
             Some(suffix) => agent.with_first_user_suffix(suffix),
             None => agent,
         };
-        let agent = if self.require.is_empty() {
+        let agent = if self.require.is_empty() && self.require_line.is_empty() {
             agent
         } else {
-            agent.with_required_markers(self.require.clone())
+            let a = if self.require.is_empty() {
+                agent
+            } else {
+                agent.with_required_markers(self.require.clone())
+            };
+            if self.require_line.is_empty() {
+                a
+            } else {
+                a.with_required_line_markers(self.require_line.clone())
+            }
         };
         let outcome = rt.block_on(agent.run(&task))?;
         drop(agent);

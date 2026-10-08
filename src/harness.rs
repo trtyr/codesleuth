@@ -41,8 +41,8 @@ pub struct Harness {
     context_tokens: u64,
     compact_percent: u64,
     first_user_suffix: Option<String>,
-    /// D021（C4）：输出契约——调用方声明的必需标记（逐字包含于最终 answer）。
-    required_markers: Vec<String>,
+    /// D021（C4）：输出契约——调用方声明的必需标记（最终 answer 必须满足）。
+    required: Vec<OutputRequirement>,
 }
 
 impl Harness {
@@ -63,14 +63,22 @@ impl Harness {
             context_tokens,
             compact_percent,
             first_user_suffix: None,
-            required_markers: Vec::new(),
+            required: Vec::new(),
         }
     }
 
     /// D021（C4）：声明输出契约——最终 answer 必须逐字包含全部标记，
     /// 缺失则补一轮修复引导，仍缺失判 CS2005 OUTPUT_CONTRACT。
     pub fn with_required_markers(mut self, markers: Vec<String>) -> Self {
-        self.required_markers = markers;
+        self.required
+            .extend(markers.into_iter().map(OutputRequirement::Contains));
+        self
+    }
+
+    /// D022：行首锚定契约——标记必须独占某行行首（防一行流糊弄）。
+    pub fn with_required_line_markers(mut self, markers: Vec<String>) -> Self {
+        self.required
+            .extend(markers.into_iter().map(OutputRequirement::LineStart));
         self
     }
 
@@ -203,7 +211,7 @@ impl Harness {
                 }
                 let answer = strip_task_echo(task, &resp.text.unwrap_or_default());
                 // D021：prose 降级收敛同样过输出契约（缺失 → 补一轮转向 → 仍缺失判 CS2005）
-                let missing = missing_markers(&self.required_markers, &answer);
+                let missing = missing_markers(&self.required, &answer);
                 if !missing.is_empty() {
                     if contract_repaired {
                         return Err(contract_error(&missing));
@@ -275,7 +283,7 @@ impl Harness {
                     ) {
                         Ok(report) => {
                             // D021：输出契约校验——缺失则补一轮修复引导，仍缺失判 CS2005
-                            let missing = missing_markers(&self.required_markers, &report.answer);
+                            let missing = missing_markers(&self.required, &report.answer);
                             if !missing.is_empty() {
                                 if contract_repaired {
                                     return Err(contract_error(&missing));
@@ -717,12 +725,38 @@ pub fn strip_task_echo(task: &str, answer: &str) -> String {
     rest.to_string()
 }
 
-/// D021（C4）：缺失标记清单——answer 未逐字包含的 required 标记。
-fn missing_markers(required: &[String], answer: &str) -> Vec<String> {
+/// D021/D022：输出契约要求。逐字 contains 可被弱模型一行流糊弄（实战实证），
+/// 故提供行首锚定语义——标记必须独占某行行首，结构性不通过一行流。
+#[derive(Debug, Clone)]
+pub enum OutputRequirement {
+    /// answer 任意位置逐字包含该标记（D021）
+    Contains(String),
+    /// 某行行首逐字以标记开头（D022，防一行流）
+    LineStart(String),
+}
+
+impl OutputRequirement {
+    fn describe(&self) -> String {
+        match self {
+            OutputRequirement::Contains(m) => format!("「{m}」（逐字包含）"),
+            OutputRequirement::LineStart(m) => format!("「{m}」（必须独占行首）"),
+        }
+    }
+
+    fn satisfied_by(&self, answer: &str) -> bool {
+        match self {
+            OutputRequirement::Contains(m) => answer.contains(m.as_str()),
+            OutputRequirement::LineStart(m) => answer.lines().any(|l| l.starts_with(m.as_str())),
+        }
+    }
+}
+
+/// D021（C4）：缺失标记清单——answer 未满足的 required 要求（人话描述，供转向/报错）。
+fn missing_markers(required: &[OutputRequirement], answer: &str) -> Vec<String> {
     required
         .iter()
-        .filter(|m| !answer.contains(m.as_str()))
-        .cloned()
+        .filter(|r| !r.satisfied_by(answer))
+        .map(OutputRequirement::describe)
         .collect()
 }
 
@@ -731,11 +765,11 @@ fn contract_error(missing: &[String]) -> CsError {
     CsError::new(
         OUTPUT_CONTRACT,
         format!(
-            "输出契约违约：修复轮后 answer 仍缺失必需标记 {}",
+            "输出契约违约：修复轮后 answer 仍不满足以下要求 {}",
             missing.join("、")
         ),
     )
-    .with_hint("调用方核对 --require 标记是否合理，或更换模型后重试")
+    .with_hint("调用方核对 --require/--require-line 标记是否合理，或更换模型后重试")
 }
 
 /// submit_report 结构诊断（D016）：弱模型常把嵌套结构摊平或泄漏内部标记，
@@ -973,6 +1007,20 @@ mod tests {
         Arc<Mutex<Vec<ChatRequest>>>,
         tempfile::TempDir,
     ) {
+        run_with_full_contract(script, registry, markers, Vec::new()).await
+    }
+
+    /// D022：双旗标契约 run（contains + line-start）。
+    async fn run_with_full_contract(
+        script: Vec<ChatResponse>,
+        registry: ToolRegistry,
+        markers: Vec<String>,
+        line_markers: Vec<String>,
+    ) -> (
+        CsResult<RunOutcome>,
+        Arc<Mutex<Vec<ChatRequest>>>,
+        tempfile::TempDir,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let audit = Audit::create(dir.path(), "t").unwrap();
         let seen = Arc::new(Mutex::new(Vec::new()));
@@ -981,7 +1029,8 @@ mod tests {
             seen: seen.clone(),
         });
         let harness = Harness::new(provider, registry, audit, "m".into(), 1_000_000, 60)
-            .with_required_markers(markers);
+            .with_required_markers(markers)
+            .with_required_line_markers(line_markers);
         let res = harness.run("任务").await;
         (res, seen, dir)
     }
@@ -1034,6 +1083,55 @@ mod tests {
         let (res, _seen, _dir) = run_with_markers(script, ToolRegistry::new(), vec![marker]).await;
         let err = res.expect_err("prose 路径契约违约应判失败");
         assert_eq!(err.code, OUTPUT_CONTRACT);
+    }
+
+    /// D022：实战博弈样本②——全部标记塞同一行，LineStart 语义结构性不通过；
+    /// 修复轮改成行首独占后收敛。
+    #[tokio::test]
+    async fn require_line_rejects_one_line_flow_then_recovers() {
+        let one_line = serde_json::json!({"answer": "```diagram-html <!DOCTYPE html> ## 功能定位 聚合统计一行流糊弄"}).to_string();
+        let proper = serde_json::json!({"answer": "## 功能定位\n聚合统计正文\n```diagram-html\n<!DOCTYPE html>\n...\n```"}).to_string();
+        let script = vec![
+            resp_call("1", "submit_report", &one_line),
+            resp_call("2", "submit_report", &proper),
+        ];
+        let (res, seen, _dir) = run_with_full_contract(
+            script,
+            ToolRegistry::new(),
+            Vec::new(),
+            vec!["```diagram-html".to_string(), "<!DOCTYPE html>".to_string()],
+        )
+        .await;
+        let out = res.expect("行首独占后应收敛");
+        assert!(out.report.answer.contains("<!DOCTYPE html>"));
+        // 第 2 次请求应携带契约转向（含「独占行首」描述）
+        let requests = seen.lock().unwrap();
+        assert!(requests[1].messages.iter().any(|m| matches!(m,
+            ChatMessage::Tool { content, .. } if content.contains("独占行首"))));
+    }
+
+    /// D022：行首独占的正确输出直接通过（无契约转向轮）。
+    #[tokio::test]
+    async fn require_line_passes_proper_multiline_without_repair() {
+        let proper = serde_json::json!({"answer": "## 功能定位\n正文\n```diagram-html\n<!DOCTYPE html>\n```"}).to_string();
+        let script = vec![resp_call("1", "submit_report", &proper)];
+        let (res, seen, _dir) = run_with_full_contract(
+            script,
+            ToolRegistry::new(),
+            Vec::new(),
+            vec!["```diagram-html".to_string(), "<!DOCTYPE html>".to_string()],
+        )
+        .await;
+        let out = res.expect("行首独占应直接通过");
+        assert!(!out.report.degraded);
+        // 全程无契约转向
+        let requests = seen.lock().unwrap();
+        assert!(
+            !requests
+                .iter()
+                .any(|r| r.messages.iter().any(|m| matches!(m,
+            ChatMessage::Tool { content, .. } if content.contains("输出契约校验未过"))))
+        );
     }
 
     #[tokio::test]
