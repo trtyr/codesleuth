@@ -37,6 +37,8 @@ pub const LLM_UNREACHABLE: CsCode = CsCode(2001);
 pub const LLM_RATE_LIMITED: CsCode = CsCode(2002);
 pub const LLM_SERVER: CsCode = CsCode(2003);
 pub const LLM_BAD_RESPONSE: CsCode = CsCode(2004);
+/// D021（C4）：输出契约违约——`--require` 声明的必需标记经一轮修复仍缺失（重试/换模型可能好）。
+pub const OUTPUT_CONTRACT: CsCode = CsCode(2005);
 pub const LLM_FUSE: CsCode = CsCode(2099);
 // ---- CS3xxx 目标库 ----
 pub const REPO_NOT_FOUND: CsCode = CsCode(3001);

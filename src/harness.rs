@@ -4,7 +4,7 @@
 
 use crate::audit::Audit;
 use crate::context;
-use crate::errors::{CsError, CsResult, LLM_FUSE};
+use crate::errors::{CsError, CsResult, LLM_FUSE, OUTPUT_CONTRACT};
 use crate::evidence::{EvidenceStore, info_keys};
 use crate::llm::{ChatMessage, ChatRequest, LlmProvider, ToolCallSpec, ToolSchema};
 use crate::report::{Evidence, Finding, Report, ReportStats};
@@ -41,6 +41,8 @@ pub struct Harness {
     context_tokens: u64,
     compact_percent: u64,
     first_user_suffix: Option<String>,
+    /// D021（C4）：输出契约——调用方声明的必需标记（逐字包含于最终 answer）。
+    required_markers: Vec<String>,
 }
 
 impl Harness {
@@ -61,7 +63,15 @@ impl Harness {
             context_tokens,
             compact_percent,
             first_user_suffix: None,
+            required_markers: Vec::new(),
         }
+    }
+
+    /// D021（C4）：声明输出契约——最终 answer 必须逐字包含全部标记，
+    /// 缺失则补一轮修复引导，仍缺失判 CS2005 OUTPUT_CONTRACT。
+    pub fn with_required_markers(mut self, markers: Vec<String>) -> Self {
+        self.required_markers = markers;
+        self
     }
 
     /// 首条用户消息后缀（P003 E2 v2：召回块 + 任务相关导航图，随首条注入一次，非 system——
@@ -91,6 +101,7 @@ impl Harness {
         let mut no_progress: u32 = 0;
         let mut zero_gain_streak: u32 = 0;
         let mut prose_streak: u32 = 0;
+        let mut contract_repaired: bool = false; // D021：输出契约修复轮预算（仅一轮）
         let mut turns: u32 = 0;
         let mut executed: u32 = 0;
         let mut total_tokens: u64 = 0;
@@ -190,7 +201,30 @@ impl Harness {
                         .record("prose_steer", &serde_json::json!({"turn": turns}))?;
                     continue;
                 }
-                let answer = resp.text.unwrap_or_default();
+                let answer = strip_task_echo(task, &resp.text.unwrap_or_default());
+                // D021：prose 降级收敛同样过输出契约（缺失 → 补一轮转向 → 仍缺失判 CS2005）
+                let missing = missing_markers(&self.required_markers, &answer);
+                if !missing.is_empty() {
+                    if contract_repaired {
+                        return Err(contract_error(&missing));
+                    }
+                    contract_repaired = true;
+                    self.audit.record(
+                        "contract_steer",
+                        &serde_json::json!({"missing": missing, "degraded_path": true}),
+                    )?;
+                    messages.push(ChatMessage::Assistant {
+                        content: Some(answer.clone()),
+                        tool_calls: Vec::new(),
+                    });
+                    messages.push(ChatMessage::User {
+                        content: format!(
+                            "输出契约校验未过：最终回答必须逐字包含以下标记：{}。请补齐后调用 submit_report 提交。",
+                            missing.join("、")
+                        ),
+                    });
+                    continue;
+                }
                 let stats = ReportStats {
                     turns,
                     tool_calls: executed,
@@ -240,6 +274,28 @@ impl Harness {
                         total_tokens,
                     ) {
                         Ok(report) => {
+                            // D021：输出契约校验——缺失则补一轮修复引导，仍缺失判 CS2005
+                            let missing = missing_markers(&self.required_markers, &report.answer);
+                            if !missing.is_empty() {
+                                if contract_repaired {
+                                    return Err(contract_error(&missing));
+                                }
+                                contract_repaired = true;
+                                self.audit.record(
+                                    "contract_steer",
+                                    &serde_json::json!({"missing": missing}),
+                                )?;
+                                self.reject_call(
+                                    call,
+                                    &format!(
+                                        "输出契约校验未过：answer 必须逐字包含以下标记：{}。请补齐后重新 submit_report。",
+                                        missing.join("、")
+                                    ),
+                                    &mut messages,
+                                )
+                                .await?;
+                                continue;
+                            }
                             self.audit.record(
                                 "report",
                                 &serde_json::json!({
@@ -466,11 +522,10 @@ impl Harness {
         duration_ms: u64,
         total_tokens: u64,
     ) -> Result<Report, String> {
-        let answer = args
-            .get("answer")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
+        let answer = strip_task_echo(
+            task,
+            args.get("answer").and_then(Value::as_str).unwrap_or(""),
+        );
         let confidence = args
             .get("confidence")
             .and_then(Value::as_str)
@@ -615,6 +670,74 @@ impl Harness {
     }
 }
 
+/// D019（C1）：任务书回显剥除——弱模型常把 prompt 原样吐回 answer 开头（实测每篇 200+ 行）。
+/// 确定性前缀匹配（零 LLM，D008 纪律延伸），只碰 answer 开头、不进正文：
+/// ① 标题式：开头若干 Markdown 标题行，文本（去 `#`、去可选「任务：」前缀后）逐字等于 task 原文；
+/// ② 裸前缀：开头逐字含 task 原文，且其后是行尾/空白/常见标点（不误剥正文中的任务引用）。
+/// 返回剥除后的 answer；无回显则原样返回。
+pub fn strip_task_echo(task: &str, answer: &str) -> String {
+    let task = task.trim();
+    if task.is_empty() {
+        return answer.to_string();
+    }
+    let mut rest = answer.trim_start_matches(['\n', '\r', ' ', '\t']);
+    loop {
+        let before = rest;
+        // ① 标题式回显行：仅当首行是标题且文本逐字等于 task（或「任务：<task>」）时剥整行
+        if rest.starts_with('#')
+            && let Some((line, tail)) = rest.split_once('\n')
+        {
+            let text = line.trim_start_matches('#').trim_start();
+            let text = text
+                .strip_prefix("任务：")
+                .or_else(|| text.strip_prefix("任务:"))
+                .unwrap_or(text)
+                .trim();
+            if text == task {
+                rest = tail.trim_start_matches(['\n', '\r', ' ', '\t']);
+            }
+        }
+        // ② 裸前缀：task 后必须是行尾/空白/标点，防误剥「task 的实现是…」这类正文引用
+        let candidate = rest.trim_start_matches('#').trim_start();
+        if let Some(after) = candidate.strip_prefix(task) {
+            let boundary = after.is_empty()
+                || after.starts_with(['\n', '\r', ' ', '\t', '：', ':', '。', '，', ',']);
+            if boundary {
+                rest = after.trim_start_matches(['\n', '\r', ' ', '\t']);
+                // 「task：正文」形态的标签冒号一并剥（仅一个）
+                if let Some(r) = rest.strip_prefix(['：', ':']) {
+                    rest = r.trim_start_matches(['\n', '\r', ' ', '\t']);
+                }
+            }
+        }
+        if rest == before {
+            break;
+        }
+    }
+    rest.to_string()
+}
+
+/// D021（C4）：缺失标记清单——answer 未逐字包含的 required 标记。
+fn missing_markers(required: &[String], answer: &str) -> Vec<String> {
+    required
+        .iter()
+        .filter(|m| !answer.contains(m.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// D021（C4）：输出契约违约错误（CS2005，上游 LLM 段——模型产出不合规，重试/换模型可能好）。
+fn contract_error(missing: &[String]) -> CsError {
+    CsError::new(
+        OUTPUT_CONTRACT,
+        format!(
+            "输出契约违约：修复轮后 answer 仍缺失必需标记 {}",
+            missing.join("、")
+        ),
+    )
+    .with_hint("调用方核对 --require 标记是否合理，或更换模型后重试")
+}
+
 /// submit_report 结构诊断（D016）：弱模型常把嵌套结构摊平或泄漏内部标记，
 /// 拒绝时回显实际解析到的顶层键 + required 缺失/类型不符清单 + 最小正确示例。
 fn schema_diagnosis(args: &Value) -> String {
@@ -695,6 +818,35 @@ fn parse_args(raw: &str) -> Option<Value> {
 mod tests {
     use super::*;
     use crate::llm::{ChatResponse, Usage};
+
+    /// D019（C1）：任务书回显剥除三态——标题式 / 裸前缀 / 不误剥。
+    #[test]
+    fn strip_task_echo_heading_bare_and_no_false_positive() {
+        let task = "重试逻辑在哪";
+        // 标题式：「# 任务：<task>」与「## <task>」
+        assert_eq!(
+            strip_task_echo(task, &format!("# 任务：{task}\n\n正文")),
+            "正文"
+        );
+        assert_eq!(strip_task_echo(task, &format!("## {task}\n正文")), "正文");
+        // 裸前缀：逐字开头 + 行尾/空白/标点边界
+        assert_eq!(strip_task_echo(task, &format!("{task}\n\n正文")), "正文");
+        assert_eq!(strip_task_echo(task, &format!("{task}：正文")), "正文");
+        // 不误剥：task 嵌在句子中间或被后续正文紧贴
+        assert_eq!(
+            strip_task_echo(task, &format!("{task}的实现是 retry()")),
+            format!("{task}的实现是 retry()")
+        );
+        assert_eq!(
+            strip_task_echo("任务A", "正文开头提到任务A 相关内容"),
+            "正文开头提到任务A 相关内容"
+        );
+        // 多重回显：标题 + 裸前缀连着剥
+        assert_eq!(
+            strip_task_echo(task, &format!("# {task}\n{task}\n\n正文")),
+            "正文"
+        );
+    }
     use crate::tools::Tool;
     use std::collections::VecDeque;
 
@@ -808,6 +960,19 @@ mod tests {
         Arc<Mutex<Vec<ChatRequest>>>,
         tempfile::TempDir,
     ) {
+        run_with_markers(script, registry, Vec::new()).await
+    }
+
+    /// D021：带输出契约的 run（其余同 run_with）。
+    async fn run_with_markers(
+        script: Vec<ChatResponse>,
+        registry: ToolRegistry,
+        markers: Vec<String>,
+    ) -> (
+        CsResult<RunOutcome>,
+        Arc<Mutex<Vec<ChatRequest>>>,
+        tempfile::TempDir,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let audit = Audit::create(dir.path(), "t").unwrap();
         let seen = Arc::new(Mutex::new(Vec::new()));
@@ -815,9 +980,60 @@ mod tests {
             script: Mutex::new(script.into_iter().collect()),
             seen: seen.clone(),
         });
-        let harness = Harness::new(provider, registry, audit, "m".into(), 1_000_000, 60);
+        let harness = Harness::new(provider, registry, audit, "m".into(), 1_000_000, 60)
+            .with_required_markers(markers);
         let res = harness.run("任务").await;
         (res, seen, dir)
+    }
+
+    /// D021（C4）三态之一：首次缺失 → 修复轮转向 → 补齐后收敛。
+    #[tokio::test]
+    async fn contract_repair_round_recovers() {
+        let marker = "<!--RESULT-->".to_string();
+        let script = vec![
+            resp_call("1", "submit_report", r#"{"answer":"没有标记"}"#),
+            resp_call(
+                "2",
+                "submit_report",
+                r#"{"answer":"正文 <!--RESULT--> 完"}"#,
+            ),
+        ];
+        let (res, seen, _dir) =
+            run_with_markers(script, ToolRegistry::new(), vec![marker.clone()]).await;
+        let out = res.expect("修复轮后应收敛");
+        assert!(out.report.answer.contains(&marker));
+        // 第 2 次请求应携带契约转向指令
+        let requests = seen.lock().unwrap();
+        assert!(requests.len() >= 2);
+        assert!(requests[1].messages.iter().any(|m| matches!(m,
+            ChatMessage::Tool { content, .. } if content.contains("输出契约校验未过"))));
+    }
+
+    /// D021（C4）三态之二：修复轮后仍缺失 → CS2005 判失败。
+    #[tokio::test]
+    async fn contract_fail_after_repair_round() {
+        let marker = "<!--RESULT-->".to_string();
+        let script = vec![
+            resp_call("1", "submit_report", r#"{"answer":"没有标记"}"#),
+            resp_call("2", "submit_report", r#"{"answer":"还是没有"}"#),
+        ];
+        let (res, _seen, _dir) = run_with_markers(script, ToolRegistry::new(), vec![marker]).await;
+        let err = res.expect_err("修复轮后仍缺应判失败");
+        assert_eq!(err.code, OUTPUT_CONTRACT);
+    }
+
+    /// D021（C4）三态之三：prose 降级路径同样过契约（缺失→转向→仍缺→CS2005）。
+    #[tokio::test]
+    async fn contract_enforced_on_degraded_prose_path() {
+        let marker = "<!--RESULT-->".to_string();
+        let script = vec![
+            resp_text("prose 无标记"),
+            resp_text("prose 仍无标记"),
+            resp_text("prose 第三次"),
+        ];
+        let (res, _seen, _dir) = run_with_markers(script, ToolRegistry::new(), vec![marker]).await;
+        let err = res.expect_err("prose 路径契约违约应判失败");
+        assert_eq!(err.code, OUTPUT_CONTRACT);
     }
 
     #[tokio::test]

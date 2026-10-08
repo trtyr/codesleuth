@@ -1,5 +1,7 @@
 //! CLI 命令面（topics/cli-and-output.md）。
 //! 退出码：0 就绪 · 1 用法 · 2 配置/凭据 · 3 上游 LLM · 4 目标库 · 5 索引 · 6 内部。
+//! 输出面（D018）：--output-format report|raw|json（替换原 --json）；
+//! 引导锁 Lost=复用继续（D020）；--require 输出契约（D021，CS2005）。
 
 use crate::config::{self, CliOverrides};
 use crate::errors::{
@@ -7,7 +9,7 @@ use crate::errors::{
     REPO_NOT_FOUND, USER_INPUT, report_error,
 };
 use crate::{audit, fence, harness, llm, tools, vector};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -26,9 +28,9 @@ pub struct Cli {
     /// 限定检索范围（glob，可多次）
     #[arg(long, value_name = "GLOB")]
     pub focus: Vec<String>,
-    /// 输出机器可读 JSON 报告（stdout 仅 JSON）
-    #[arg(long)]
-    pub json: bool,
+    /// 输出格式（D018）：report=人类模板（默认）· raw=仅模型正文（不套报告壳）· json=结构化报告
+    #[arg(long, value_enum, default_value_t = OutputFormat::Report)]
+    pub output_format: OutputFormat,
     /// 将报告落盘到文件
     #[arg(long, value_name = "FILE")]
     pub out: Option<PathBuf>,
@@ -47,6 +49,9 @@ pub struct Cli {
     /// 启用向量召回暖启动 + vector_search 工具（P003）
     #[arg(long)]
     pub vector: bool,
+    /// 输出契约（D021）：最终回答必须逐字包含的标记，可多次；缺失补一轮仍缺则判 CS2005
+    #[arg(long = "require", value_name = "MARKER")]
+    pub require: Vec<String>,
     /// 启用 repo map 预算化注入（P003 E2）
     #[arg(long)]
     pub repo_map: bool,
@@ -55,6 +60,16 @@ pub struct Cli {
     pub verbose: u8,
     #[command(subcommand)]
     pub command: Option<Command>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum OutputFormat {
+    /// 人类可读模板（含统计与证据清单）
+    Report,
+    /// 仅透传 report.answer 原文——交付正文不套「侦察报告」壳（C2）
+    Raw,
+    /// 结构化 Report JSON（stdout 仅 JSON）
+    Json,
 }
 
 #[derive(Subcommand, Debug)]
@@ -158,26 +173,42 @@ impl Cli {
         );
         let rt = tokio::runtime::Runtime::new()
             .map_err(|e| CsError::new(INTERNAL, format!("tokio runtime 启动失败: {e}")))?;
-        // D014：手动预建索引与 run 时引导共用同一把引导锁，竞争败者判负退出。P005 R1：语义收残 acquire_guard。
-        let _guard = crate::bootlock::acquire_guard(
+        // D014：手动预建索引与 run 时引导共用同一把引导锁；
+        // D020：等待后获得 = 对手刚完成构建，若产物已就绪则直接复用返回。
+        let index_dir = vector::store::project_index_dir(&repo_abs);
+        match crate::bootlock::acquire_guard(
             &repo_abs,
             crate::bootlock::DEFAULT_TIMEOUT,
             "向量索引构建",
-        )?;
-        let report = rt.block_on(vector::build_vector_index(
-            &repo_abs,
-            &vector::store::project_index_dir(&repo_abs),
-            embed,
-            mode,
-        ))?;
-        eprintln!(
-            "# 向量索引: {} chunks（嵌入 {} 复用 {} 清理 {}）→ {}",
-            report.chunks_total,
-            report.embedded,
-            report.reused,
-            report.gc_removed,
-            report.index_path.display()
-        );
+        )? {
+            crate::bootlock::BootLockOutcome::OpponentFinished
+                if vector::store::index_path(
+                    &index_dir,
+                    &vector::store::fingerprint(&repo_abs),
+                )
+                .exists() =>
+            {
+                eprintln!("# 向量索引: 另一进程刚完成构建，复用其产物（D020）");
+                return Ok(());
+            }
+            outcome => {
+                let _guard = match outcome {
+                    crate::bootlock::BootLockOutcome::Won(g) => Some(g),
+                    _ => None, // 产物缺失的罕见路径：无锁增量补建（增量事务保护仍有效）
+                };
+                let report = rt.block_on(vector::build_vector_index(
+                    &repo_abs, &index_dir, embed, mode,
+                ))?;
+                eprintln!(
+                    "# 向量索引: {} chunks（嵌入 {} 复用 {} 清理 {}）→ {}",
+                    report.chunks_total,
+                    report.embedded,
+                    report.reused,
+                    report.gc_removed,
+                    report.index_path.display()
+                );
+            }
+        }
         Ok(())
     }
 
@@ -263,7 +294,7 @@ impl Cli {
                 Some(Arc::new(engine))
             }
             Err(e) if e.code == INDEX_LOCKED => {
-                // D014：引导锁竞争败者判负退出——绝不带着残缺工具面继续任务
+                // D020：引导锁仅剩超时判负路径（Lost 已改为复用继续）——超时绝不带残缺工具面继续
                 return Err(e);
             }
             Err(e) => {
@@ -319,7 +350,7 @@ impl Cli {
                 Ok(Some(suffix)) => first_suffix = Some(suffix),
                 Ok(None) => {}
                 Err(e) if e.code == INDEX_LOCKED => {
-                    // D014：引导锁竞争败者判负退出——不降级
+                    // D020：引导锁仅剩超时判负路径（Lost 已改为复用继续）——不降级
                     return Err(e);
                 }
                 Err(e) => {
@@ -367,6 +398,11 @@ impl Cli {
         let agent = match first_suffix {
             Some(suffix) => agent.with_first_user_suffix(suffix),
             None => agent,
+        };
+        let agent = if self.require.is_empty() {
+            agent
+        } else {
+            agent.with_required_markers(self.require.clone())
         };
         let outcome = rt.block_on(agent.run(&task))?;
         drop(agent);
@@ -441,15 +477,20 @@ impl Cli {
         std::fs::write(&json_path, &report_json)
             .map_err(|e| CsError::new(INTERNAL, format!("报告写入失败: {e}")))?;
         if let Some(out_path) = &self.out {
-            let body = if self.json { &report_json } else { &human };
+            let body: String = match self.output_format {
+                OutputFormat::Json => report_json.clone(),
+                OutputFormat::Raw => outcome.report.answer.clone(),
+                OutputFormat::Report => human.clone(),
+            };
             std::fs::write(out_path, body)
                 .map_err(|e| CsError::new(INTERNAL, format!("--out 写入失败: {e}")))?;
         }
 
-        if self.json {
-            println!("{report_json}");
-        } else {
-            println!("{human}");
+        // D018：stdout 纪律——report=人类模板 · raw=仅模型正文（C2 交付通道）· json=仅结构化 JSON
+        match self.output_format {
+            OutputFormat::Json => println!("{report_json}"),
+            OutputFormat::Raw => println!("{}", outcome.report.answer),
+            OutputFormat::Report => println!("{human}"),
         }
         eprintln!(
             "# {} turns · {} tool calls\n# 报告: {}\n# 审计: {}",
@@ -561,37 +602,41 @@ fn setup_vector_layer(
         cfg.vector.embed_dims,
     );
     // D014：向量构建与 graph 引导共用仓库级引导锁，进程间串行化；
-    // 竞争败者判负退出，不降级。P005 R1：判负语义收残 acquire_guard。
-    let vguard = crate::bootlock::acquire_guard(
+    // D020：等待后获得 = 对手刚完成构建，产物已就绪，跳过构建直接开库。
+    let index_dir = vector::store::project_index_dir(ctx.repo_abs);
+    match crate::bootlock::acquire_guard(
         ctx.repo_abs,
         crate::bootlock::DEFAULT_TIMEOUT,
         "向量索引构建",
-    )?;
-    // 索引补建失败不致命（弹性降级，E3-R1 engram CS4015 教训）：警告后尝试复用已有索引
-    match ctx.rt.block_on(vector::build_vector_index(
-        ctx.repo_abs,
-        &vector::store::project_index_dir(ctx.repo_abs),
-        embed.clone(),
-        mode,
-    )) {
-        Ok(report) => eprintln!(
-            "# 向量索引: {} chunks（嵌入 {} 复用 {} 清理 {}）",
-            report.chunks_total, report.embedded, report.reused, report.gc_removed
-        ),
-        Err(e) => {
-            tracing::warn!(component = "vector_build", error = %e, "向量索引构建失败（降级：尝试复用已有索引）");
-            // P005 R5.2：非致命降级进审计留痕（best-effort）
-            let _ = ctx.audit.record(
-                "degraded",
-                &serde_json::json!({"component": "vector_build", "error": e.to_string()}),
-            );
+    )? {
+        crate::bootlock::BootLockOutcome::Won(vguard) => {
+            // 索引补建失败不致命（弹性降级，E3-R1 engram CS4015 教训）：警告后尝试复用已有索引
+            match ctx.rt.block_on(vector::build_vector_index(
+                ctx.repo_abs,
+                &index_dir,
+                embed.clone(),
+                mode,
+            )) {
+                Ok(report) => eprintln!(
+                    "# 向量索引: {} chunks（嵌入 {} 复用 {} 清理 {}）",
+                    report.chunks_total, report.embedded, report.reused, report.gc_removed
+                ),
+                Err(e) => {
+                    tracing::warn!(component = "vector_build", error = %e, "向量索引构建失败（降级：尝试复用已有索引）");
+                    // P005 R5.2：非致命降级进审计留痕（best-effort）
+                    let _ = ctx.audit.record(
+                        "degraded",
+                        &serde_json::json!({"component": "vector_build", "error": e.to_string()}),
+                    );
+                }
+            }
+            drop(vguard); // 构建段结束即放锁（D014：锁不跨 LLM 调用、不罩检索）
+        }
+        crate::bootlock::BootLockOutcome::OpponentFinished => {
+            eprintln!("# 向量索引: 另一进程刚完成构建，复用其产物（D020）");
         }
     }
-    drop(vguard); // 构建段结束即放锁（D014：锁不跨 LLM 调用、不罩检索）
-    let idx = vector::store::index_path(
-        &vector::store::project_index_dir(ctx.repo_abs),
-        &vector::store::fingerprint(ctx.repo_abs),
-    );
+    let idx = vector::store::index_path(&index_dir, &vector::store::fingerprint(ctx.repo_abs));
     let store = match vector::VectorStore::open(&idx) {
         Ok(s) => s,
         Err(e) => {
@@ -744,6 +789,23 @@ mod tests {
         assert_eq!(cli.repo.as_deref(), Some(std::path::Path::new(".")));
     }
 
+    /// D018：--output-format 三态解析——默认 report，raw/json 可显式选中。
+    #[test]
+    fn parses_output_format() {
+        let cli = Cli::try_parse_from([
+            "codesleuth",
+            "任务",
+            "--repo",
+            ".",
+            "--output-format",
+            "raw",
+        ])
+        .unwrap();
+        assert_eq!(cli.output_format, OutputFormat::Raw);
+        let cli = Cli::try_parse_from(["codesleuth", "任务"]).unwrap();
+        assert_eq!(cli.output_format, OutputFormat::Report);
+    }
+
     #[test]
     fn parses_full_surface() {
         let cli = Cli::try_parse_from([
@@ -755,7 +817,8 @@ mod tests {
             "a/**",
             "--focus",
             "b/**",
-            "--json",
+            "--output-format",
+            "json",
             "--out",
             "o.json",
             "--model",
@@ -767,7 +830,8 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(cli.focus.len(), 2);
-        assert!(cli.json && cli.fresh_index);
+        assert_eq!(cli.output_format, OutputFormat::Json);
+        assert!(cli.fresh_index);
         assert_eq!(cli.verbose, 2);
         assert_eq!(cli.model.as_deref(), Some("m"));
     }

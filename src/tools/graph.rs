@@ -74,18 +74,26 @@ impl CodegraphEngine {
 
     async fn start_with_bin(root: &Path, bin: &str, force_reindex: bool) -> CsResult<Self> {
         // D014：索引引导（init/force）进仓库级引导锁，进程间串行化；
-        // 竞争败者判负退出，不降级——重跑即可（索引已就绪）。P005 R1：判负语义收残 acquire_guard。
-        let guard = crate::bootlock::acquire_guard(
+        // D020：等待后获得 = 对手刚完成引导，索引已就绪——跳过 init/force 直接进 serve。
+        match crate::bootlock::acquire_guard(
             root,
             crate::bootlock::DEFAULT_TIMEOUT,
             "codegraph 索引引导",
-        )?;
-        if force_reindex {
-            run_cli(bin, &["index", "--force", "--quiet"], root).await?;
-        } else if !root.join(".codegraph").exists() {
-            run_cli(bin, &["init"], root).await?;
+        )? {
+            crate::bootlock::BootLockOutcome::Won(guard) => {
+                if force_reindex {
+                    run_cli(bin, &["index", "--force", "--quiet"], root).await?;
+                } else if !root.join(".codegraph").exists() {
+                    run_cli(bin, &["init"], root).await?;
+                }
+                drop(guard); // 引导段结束即放锁；serve 阶段不持锁（D014）
+            }
+            crate::bootlock::BootLockOutcome::OpponentFinished => {
+                tracing::warn!(
+                    "对手进程刚完成 codegraph 索引引导，本进程复用其产物直接进 serve（D020）"
+                );
+            }
         }
-        drop(guard); // 引导段结束即放锁；serve 阶段不持锁（D014）
         let client = McpClient::spawn(bin, &["serve", "--mcp"], root).await?;
         let initialized = client.initialize().await?;
         // 服务器在 initialize 响应里自带 usage guidance（Phase 4 可捕获并入 system prompt）

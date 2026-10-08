@@ -97,8 +97,12 @@ codesleuth "鉴权中间件在哪，被哪些路由使用？" --repo /path/to/pr
 <summary><b>更多用法</b></summary>
 
 ```bash
+# 输出格式 --output-format：report=人类模板（默认）· raw=仅模型正文（交付通道，不套报告壳）· json=结构化报告
 # 机器可读 JSON（schema 版本化，供上游 agent 消费）
-codesleuth "错误处理有哪些模式？" --repo . --json --out report.json
+codesleuth "错误处理有哪些模式？" --repo . --output-format json --out report.json
+
+# 上游编排场景：raw 交付 + 输出契约（回答必须含指定标记，缺失补一轮仍缺则判 CS2005）
+codesleuth "整理功能清单" --repo . --output-format raw --require "<!--FEATURE-INDEX-->"
 
 # 多模型档位：--profile 选用 [llm.profiles.<名字>]；--model/--base-url 旗标仍可再压
 codesleuth "这个模块的测试覆盖如何？" --repo . --profile review

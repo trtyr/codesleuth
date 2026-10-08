@@ -2,12 +2,12 @@
 //! 一把跨进程文件锁 `<repo>/.codesleuth/boot.lock`，把两层「check-then-act」索引
 //! 引导在进程间串行化。
 //!
-//! 语义（D014 用户拍板「输者死不降级」）：
+//! 语义（D020 修订，部分取代 D014「输者死不降级」）：
 //! - 锁空闲立即拿到 = [`BootLock::Won`]，调用方正常执行引导；
-//! - 锁被占 → 轮询等待 → 拿到 = [`BootLock::Lost`]（对手刚完成引导）→ 调用方必须
-//!   以 CS4016 INDEX_LOCKED 判负退出，禁止降级——残缺工具面的侦察照样烧 token、
-//!   产出劣质报告还伪装成功，重跑成本 ≈ 0（索引已就绪）；
-//! - 等待超过 timeout = 同码 CS4016 退出。
+//! - 锁被占 → 轮询等待 → 拿到 = [`BootLock::Lost`]（对手刚完成引导）→ 产物已就绪，
+//!   败者继续跑成本 ≈ 0（增量构建全复用），调用方跳过引导段直接继续；
+//!   原 D014「残缺工具面烧 token」担忧不成立——工具面装配发生在锁外；
+//! - 等待超过 timeout = CS4016 判负退出（唯一判负路径）。
 //!
 //! 实现：`std::fs::File::try_lock`（flock，Rust 1.89 稳定）。进程崩溃由内核放锁，
 //! 无陈旧锁问题；锁文件常驻 `.codesleuth/`（writeguard 豁免目录，D011 式工具元数据）。
@@ -47,6 +47,15 @@ impl Drop for BootLockGuard {
     }
 }
 
+/// 引导锁结果（D020）。
+#[derive(Debug)]
+pub enum BootLockOutcome {
+    /// 锁空闲直接拿到：调用方执行引导段，结束 drop 放锁。
+    Won(BootLockGuard),
+    /// 等待后拿到但对手刚完成引导：产物已就绪，调用方跳过引导直接继续（锁不持有）。
+    OpponentFinished,
+}
+
 /// 获取仓库引导锁。
 pub fn acquire(repo_root: &Path, timeout: Duration) -> CsResult<BootLock> {
     let dir = repo_root.join(".codesleuth");
@@ -81,8 +90,8 @@ pub fn acquire(repo_root: &Path, timeout: Duration) -> CsResult<BootLock> {
         Err(std::fs::TryLockError::WouldBlock) => {}
     }
 
-    // 竞争路径：轮询等待。拿到即判负——对手刚完成引导，本进程的引导已无必要，
-    // 任务带着残缺工具面继续只会烧 token，故交由调用方以 INDEX_LOCKED 退出。
+    // 竞争路径：轮询等待。拿到即 Lost——对手刚完成引导，产物已就绪，
+    // 调用方跳过引导段直接继续（D020）。
     let deadline = Instant::now() + timeout;
     tracing::warn!(
         "索引引导锁被占（{}），进入轮询等待（上限 {}s）——另一进程可能正在建索引",
@@ -100,9 +109,8 @@ pub fn acquire(repo_root: &Path, timeout: Duration) -> CsResult<BootLock> {
         std::thread::sleep(POLL_INTERVAL);
         match file.try_lock() {
             Ok(()) => {
-                tracing::warn!(
-                    "引导锁等待后获得：对手刚完成引导，本进程按 D014 判负退出（重跑秒过）"
-                );
+                tracing::warn!("引导锁等待后获得：对手刚完成引导，本进程复用产物继续（D020）");
+                drop(file); // 产物已就绪，本进程不引导，立即放锁
                 return Ok(BootLock::Lost);
             }
             Err(std::fs::TryLockError::Error(e)) => {
@@ -113,18 +121,17 @@ pub fn acquire(repo_root: &Path, timeout: Duration) -> CsResult<BootLock> {
     }
 }
 
-/// acquire 的判负语义封装（P005 R1，coupling 审查去重）：graph 引导、run 时向量构建、
-/// index --vector 手动构建三个调用点统一走这里——Won 直接拿 guard 干活，
-/// Lost/等待超时 → INDEX_LOCKED 结构化错误，由调用方 `?` 传播为判负退出
-/// （cli 的降级 catch-all 放行该码，不会误降级）。`what` 用于错误文案。
-pub fn acquire_guard(repo_root: &Path, timeout: Duration, what: &str) -> CsResult<BootLockGuard> {
+/// acquire 的统一封装（P005 R1 判负去重、D020 语义更新）：graph 引导、run 时向量构建、
+/// index --vector 手动构建三个调用点统一走这里——Won 拿 guard 执行引导段；
+/// Lost（对手刚完成引导）→ OpponentFinished，调用方跳过引导直接继续；
+/// 等待超时 → CS4016 结构化错误（唯一判负路径）。
+pub fn acquire_guard(repo_root: &Path, timeout: Duration, what: &str) -> CsResult<BootLockOutcome> {
     match acquire(repo_root, timeout)? {
-        BootLock::Won(g) => Ok(g),
-        BootLock::Lost => Err(CsError::new(
-            INDEX_LOCKED,
-            format!("另一 codesleuth 进程刚完成：{what}"),
-        )
-        .with_hint("索引已就绪：重跑本命令即可，引导秒过")),
+        BootLock::Won(g) => Ok(BootLockOutcome::Won(g)),
+        BootLock::Lost => {
+            tracing::warn!("对手进程刚完成：{what}——复用其产物继续（D020）");
+            Ok(BootLockOutcome::OpponentFinished)
+        }
     }
 }
 
@@ -147,9 +154,9 @@ mod tests {
         }
     }
 
-    /// 持锁期间第二个获取者必须等待；锁释放后它拿到 = Lost（判负语义）。
+    /// D020：持锁期间第二个获取者必须等待；锁释放后它拿到 = OpponentFinished（复用继续）。
     #[test]
-    fn second_acquirer_waits_then_reports_lost() {
+    fn second_acquirer_waits_then_reuses() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         let BootLock::Won(g1) = acquire(dir.path(), DEFAULT_TIMEOUT).unwrap() else {
@@ -163,7 +170,10 @@ mod tests {
         // 其下一次轮询（~1s）拿到 → Lost。轮询间隔 500ms 给了足够裕度。
         std::thread::sleep(Duration::from_millis(600));
         drop(g1);
-        assert!(h.join().unwrap(), "waiter must report Lost, not Won");
+        assert!(
+            h.join().unwrap(),
+            "waiter must report Lost (opponent finished), not Won"
+        );
     }
 
     /// 等锁超时 → CS4016 结构化错误（不 panic、不静默）。
@@ -184,21 +194,46 @@ mod tests {
         h.join().unwrap();
     }
 
-    /// P005 R1：acquire_guard 判负路径 = INDEX_LOCKED 结构化错误（带 hint）。
+    /// D020：acquire_guard 的 Lost 路径 = OpponentFinished（复用继续，不再判负）。
     #[test]
-    fn acquire_guard_reports_lost_as_index_locked() {
+    fn acquire_guard_reports_lost_as_opponent_finished() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         let BootLock::Won(g1) = acquire(dir.path(), DEFAULT_TIMEOUT).unwrap() else {
             panic!("first must win");
         };
         let h = std::thread::spawn(move || {
-            let err = acquire_guard(&root, DEFAULT_TIMEOUT, "测试引导").unwrap_err();
-            assert_eq!(err.code, INDEX_LOCKED);
-            assert!(err.hint.is_some());
+            match acquire_guard(&root, DEFAULT_TIMEOUT, "测试引导").unwrap() {
+                BootLockOutcome::OpponentFinished => {}
+                BootLockOutcome::Won(_) => panic!("opponent finished, not won"),
+            }
         });
         std::thread::sleep(Duration::from_millis(600));
         drop(g1);
         h.join().unwrap();
+    }
+
+    /// D020：对手完成后锁已释放——复用方（或第三方）可重新 Won（无死锁）。
+    #[test]
+    fn lock_is_free_after_opponent_finished() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let BootLock::Won(g1) = acquire(dir.path(), DEFAULT_TIMEOUT).unwrap() else {
+            panic!("first must win");
+        };
+        let h = std::thread::spawn(move || {
+            assert!(matches!(
+                acquire_guard(&root, DEFAULT_TIMEOUT, "测试引导").unwrap(),
+                BootLockOutcome::OpponentFinished
+            ));
+        });
+        std::thread::sleep(Duration::from_millis(600));
+        drop(g1);
+        h.join().unwrap();
+        // OpponentFinished 不持锁：下一个获取者立即 Won
+        assert!(matches!(
+            acquire_guard(dir.path(), DEFAULT_TIMEOUT, "再次引导").unwrap(),
+            BootLockOutcome::Won(_)
+        ));
     }
 }
