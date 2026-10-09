@@ -29,11 +29,8 @@ impl Fence {
     /// ②canonicalize 解 symlink 后复检。
     pub fn resolve(&self, rel: &str) -> CsResult<PathBuf> {
         let candidate = self.root.join(rel);
-        let candidate_abs = if candidate.is_absolute() {
-            candidate.clone()
-        } else {
-            std::env::current_dir().unwrap_or_default().join(&candidate)
-        };
+        // P007 R4.9：不可达 else 分支已删——root 经 canonicalize 必为绝对，join 结果恒绝对
+        let candidate_abs = candidate.clone();
         if !starts_with_root(&normalize(&candidate_abs), &self.root) {
             return Err(
                 CsError::new(FENCE_DENIED, format!("路径逃逸出仓库围栏: {rel}"))

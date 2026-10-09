@@ -257,6 +257,48 @@ fn is_comment_line(line: &str) -> bool {
         || t.starts_with("\"\"\"")
 }
 
+/// P007 R3.24：leftover/fallback 块按 MAX_CHUNK_CHARS 行窗二次切分——旧实现单块
+/// 可达 MAX_FILE_BYTES=400k 字符，违反切块契约（嵌入网关可能拒收/质量塌陷），
+/// 链路上没有任何一层兜住尺寸。行窗无重叠，header 每窗重复（保持可寻址性）。
+#[allow(clippy::too_many_arguments)]
+fn push_windowed(
+    chunks: &mut Vec<Chunk>,
+    file: &str,
+    start_line: usize,
+    window: &[String],
+    symbol: &str,
+    kind: &str,
+    lang: &str,
+    header: String,
+) {
+    let max = MAX_CHUNK_CHARS.saturating_sub(header.len() + 1).max(1);
+    let mut start = 0;
+    while start < window.len() {
+        let mut used = 0usize;
+        let mut end = start;
+        while end < window.len() {
+            let l = window[end].len() + 1;
+            if used + l > max && end > start {
+                break; // 单行超限也整行纳入（不切行内，保语义完整）
+            }
+            used += l;
+            end += 1;
+        }
+        let text = format!("{header}\n{}", window[start..end].join("\n"));
+        chunks.push(make_chunk(
+            file,
+            start_line + start,
+            start_line + end - 1,
+            symbol,
+            kind,
+            lang,
+            header.clone(),
+            text,
+        ));
+        start = end;
+    }
+}
+
 /// 主块 + leftover + 兜底的编排。nodes 全量（含 file/import/variable），内部自行分层。
 pub fn plan_chunks(repo_root: &Path, nodes: &[SymbolRow]) -> CsResult<Vec<Chunk>> {
     let mut chunks: Vec<Chunk> = Vec::new();
@@ -374,17 +416,17 @@ pub fn plan_chunks(repo_root: &Path, nodes: &[SymbolRow]) -> CsResult<Vec<Chunk>
                 continue;
             }
             let header = breadcrumb(file, "<leftover>", "leftover");
-            let text = format!("{header}\n{}", slice.join("\n"));
-            chunks.push(make_chunk(
+            // P007 R3.24：行窗二次切分，不再产出无上限单块
+            push_windowed(
+                &mut chunks,
                 file,
                 gs,
-                ge,
+                slice,
                 "<leftover>",
                 "leftover",
                 &lang,
                 header,
-                text,
-            ));
+            );
         }
     }
 
@@ -456,22 +498,22 @@ pub fn plan_chunks(repo_root: &Path, nodes: &[SymbolRow]) -> CsResult<Vec<Chunk>
             "text".to_string()
         };
         for (s, e) in sections {
-            let body = lines[s..=e].join("\n");
-            if body.trim().is_empty() {
+            let body: Vec<String> = lines[s..=e].to_vec();
+            if body.iter().all(|l| l.trim().is_empty()) {
                 continue;
             }
             let header = breadcrumb(&rel, "<fallback>", "fallback");
-            let text = format!("{header}\n{body}");
-            chunks.push(make_chunk(
+            // P007 R3.24：行窗二次切分，不再产出无上限单块
+            push_windowed(
+                &mut chunks,
                 &rel,
                 s + 1,
-                e + 1,
+                &body,
                 "<fallback>",
                 "fallback",
                 &lang,
                 header,
-                text,
-            ));
+            );
         }
     }
 
@@ -574,6 +616,28 @@ mod tests {
                 .all(|c| c.text.contains("src/big.rs › big（function）"))
         );
         assert!(main.iter().all(|c| c.text.len() <= MAX_CHUNK_CHARS + 200));
+    }
+
+    #[test]
+    fn oversized_leftover_is_windowed_under_chunk_cap() {
+        // P007 R3.24 回归：无 codegraph 覆盖的超长文本文件被行窗二次切分，
+        // 单块 text 不超 MAX_CHUNK_CHARS（旧实现单块可达 400k 字符）
+        let dir = tempfile::tempdir().unwrap();
+        let body: String = (0..2_500)
+            .map(|i| format!("line {i} {}\n", "内容".repeat(20)))
+            .collect();
+        std::fs::write(dir.path().join("big.txt"), &body).unwrap();
+        let chunks = plan_chunks(dir.path(), &[]).unwrap();
+        assert!(chunks.len() > 1, "超长文件应被切多块");
+        for c in &chunks {
+            assert!(
+                c.text.len() <= MAX_CHUNK_CHARS,
+                "块 {} 超上限: {} > {}",
+                c.symbol,
+                c.text.len(),
+                MAX_CHUNK_CHARS
+            );
+        }
     }
 
     #[test]

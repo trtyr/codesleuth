@@ -118,17 +118,8 @@ impl McpClient {
         Ok(resp)
     }
 
-    pub async fn list_tools(&self) -> CsResult<Vec<String>> {
-        let resp = self.request("tools/list", &json!({})).await?;
-        Ok(resp["result"]["tools"]
-            .as_array()
-            .map(|ts| {
-                ts.iter()
-                    .filter_map(|t| t["name"].as_str().map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default())
-    }
+    // P007 R4.7：list_tools 已删——工具集在 cli.rs 静态注册，从不向 server 查询；
+    // 初始化返回的 usage guidance 已在 initialize 处消费
 
     pub async fn call_tool(&self, name: &str, args: Value) -> CsResult<String> {
         let resp = self

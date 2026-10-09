@@ -67,12 +67,7 @@ impl VectorStore {
                 dim INTEGER NOT NULL
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_chunks_key ON chunks(file, symbol, line_start);
-            CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS descriptions (
-                key TEXT PRIMARY KEY,
-                text_hash TEXT NOT NULL,
-                description TEXT NOT NULL
-            );",
+            CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
         )
         .map_err(|e| CsError::new(INDEX_NOT_AVAILABLE, format!("建表失败: {e}")))?;
         Ok(Self { conn })
@@ -102,14 +97,11 @@ impl VectorStore {
         Ok(())
     }
 
-    /// 垃圾回收（用户拍板 2026-10-04）：删除当前块集合之外的失效块——向量与描述一起清，
+    /// 垃圾回收（用户拍板 2026-10-04）：删除当前块集合之外的失效块——
     /// 索引学会忘记死数据（陈旧向量会指向已不存在的行号，污染召回）。
     /// 返回实际删除的块数（P005 R6.1：按 DELETE 影响行数计，幂等重删返回 0）。
-    pub fn remove_stale(&self, keys: &[String]) -> CsResult<usize> {
-        Self::remove_stale_on(&self.conn, keys)
-    }
-
-    /// remove_stale 的连接参数化内核（P005 R3）：同一 GC 逻辑可在事务内复用。
+    /// P007 R4.8：公开包装已删（生产唯一入口 commit_build 内的 _on 版；
+    /// 测试直调 _on）；descriptions 表随描述层移除一并删除（R4.4）。
     fn remove_stale_on(conn: &Connection, keys: &[String]) -> CsResult<usize> {
         let mut n = 0usize;
         for k in keys {
@@ -131,8 +123,7 @@ impl VectorStore {
                     rusqlite::params![parts[0], parts[1], line_start],
                 )
                 .map_err(|e| CsError::new(INDEX_NOT_AVAILABLE, format!("GC 删除块失败: {e}")))?;
-            conn.execute("DELETE FROM descriptions WHERE key = ?1", [k])
-                .map_err(|e| CsError::new(INDEX_NOT_AVAILABLE, format!("GC 删除描述失败: {e}")))?;
+            // P007 R4.4：descriptions 表已随描述层移除删除，GC 不再执行永远 0 行的 DELETE
             // P005 R6.1：按实际删除行数计（原实现按尝试数计，重删也 +1，报告失真）
             n += deleted;
         }
@@ -337,7 +328,8 @@ mod tests {
     }
 
     #[test]
-    fn remove_stale_deletes_vectors_and_descriptions() {
+    fn remove_stale_deletes_stale_vectors() {
+        // P007 R4.8：包装已删，测试直调 _on 内核；R4.4：descriptions 断言随表删除
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("vectors.db");
         let store = VectorStore::open(&db).unwrap();
@@ -348,11 +340,11 @@ mod tests {
         let k2 = chunk_key(&c2);
         assert_eq!(store.count().unwrap(), 2);
 
-        let removed = store.remove_stale(std::slice::from_ref(&k2)).unwrap();
+        let removed = VectorStore::remove_stale_on(&store.conn, std::slice::from_ref(&k2)).unwrap();
         assert_eq!(removed, 1);
         assert_eq!(store.count().unwrap(), 1);
         // 幂等：再删一次不报错；P005 R6.1 语义 = 实际删除行数，已删重删返回 0
-        assert_eq!(store.remove_stale(&[k2]).unwrap(), 0);
+        assert_eq!(VectorStore::remove_stale_on(&store.conn, &[k2]).unwrap(), 0);
         assert_eq!(store.count().unwrap(), 1);
     }
 

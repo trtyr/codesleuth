@@ -74,9 +74,7 @@ impl SessionLog {
         }
     }
 
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
+    // P007 R4.10：path() 已删（零调用；调用方在 Harness 持有 Audit 前自行捕获路径）
 }
 
 impl Write for SessionLog {

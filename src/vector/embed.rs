@@ -63,11 +63,8 @@ impl EmbedClient {
             batch_size: 64,
         }
     }
-
-    pub fn with_batch_size(mut self, n: usize) -> Self {
-        self.batch_size = n.max(1);
-        self
-    }
+    // P007 R4.6：with_batch_size 已删——构建器零调用，batch_size 构造期硬编码，
+    // 为不存在的调参需求预留（推翻 P004/P005「保留」裁决，overdesign 复判）
 
     /// 批量嵌入：按 batch_size 分批，工人池并发（EMBED_CONCURRENCY），按批序号还原顺序。
     pub async fn embed(&self, texts: &[String]) -> CsResult<Vec<Vec<f32>>> {

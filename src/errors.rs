@@ -90,10 +90,7 @@ impl CsError {
         self
     }
 
-    pub fn retryable(mut self) -> Self {
-        self.retryable = true;
-        self
-    }
+    // P007 R4.5：retryable() 单参构建器已删（生产零调用，全仓统一 with_retryable(bool)）
 
     pub fn with_retryable(mut self, retryable: bool) -> Self {
         self.retryable = retryable;
@@ -140,10 +137,11 @@ mod tests {
 
     #[test]
     fn builder_fluency() {
+        // P007 R4.5：retryable() 已删，统一 with_retryable(bool)
         let e = CsError::new(CONFIG_MISSING, "key 未找到")
             .with_hint("写入 ~/.codesleuth/config.toml 的 [llm].api_key")
             .with_source("read config.toml: no such file")
-            .retryable();
+            .with_retryable(true);
         assert!(e.retryable);
         assert_eq!(
             e.hint.as_deref(),

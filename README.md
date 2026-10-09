@@ -109,11 +109,7 @@ codesleuth "整理功能清单" --repo . --output-format raw \
 # 多模型档位：--profile 选用 [llm.profiles.<名字>]；--model/--base-url 旗标仍可再压
 codesleuth "这个模块的测试覆盖如何？" --repo . --profile review
 
-# 聚焦子目录
-codesleuth "错误处理有哪些模式？" --repo . --focus "crates/**"
-
-# 索引管理
-codesleuth index /path/to/project --rebuild
+# 索引管理（向量索引；结构索引由 codegraph 在 run 时按需自建，重建用 run --fresh-index）
 codesleuth index /path/to/project --vector      # 语义召回：向量化全仓 + 任务相关导航图
 ```
 

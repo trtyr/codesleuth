@@ -1,135 +1,51 @@
-//! 召回引擎（P003 E1b · 设计稿 §3）：SQLite 真相 + 会话内 HNSW 影子图 + 三段式查询。
+//! 召回引擎（P003 E1b）：SQLite 真相快照 + 全量精确余弦暴力召回。
 //!
-//! 三段式：① HNSW k×3 超采（ef_search=64）→ ② 候选精确重算余弦 → ③ 墓碑过滤取 top-K。
-//! P007 R3.19 口径同步：MIN_HNSW_SIZE=100_000（2026-10-05 用户拍板暖启动零负担，
-//! 旧注释「<1000 向量走暴力」已失真）；墓碑超 20% 触发 compact。
+//! P007 R4.1 大扫除：HNSW 影子图 + 墓碑/压缩整套机制删除——MIN_HNSW_SIZE=100_000
+//! 的「暖启动零负担」拍板意味着现实所有仓库都走暴力路径，影子图是永不激活的
+//! 投机通用化（overdesign 审查裁决）。召回语义：全量精确余弦，结果确定性排序。
 
 use crate::errors::{CsError, CsResult, INDEX_NOT_AVAILABLE};
 use crate::vector::chunk::Chunk;
 use crate::vector::embed::{EmbedClient, instruct_query};
 use crate::vector::store::{VectorStore, cosine};
-use hnsw_rs::prelude::*;
-use std::collections::HashSet;
 
-pub const HNSW_M: usize = 16;
-pub const HNSW_MAX_LAYER: usize = 16;
-pub const HNSW_EF_CONSTRUCTION: usize = 200;
-pub const HNSW_EF_SEARCH: usize = 64;
-/// 查询超采倍数（ANN 近似 → 精确复算前的候选池扩容）。
-pub const OVERFETCH_FACTOR: usize = 3;
-/// 低于此规模直接暴力（HNSW 无收益且更精确）。
-pub const MIN_HNSW_SIZE: usize = 100_000; // 暖启动零负担（2026-10-05 用户硬要求）：≤10 万块直接精确暴力（查询亚秒级），免会话启动 HNSW 重建分钟级成本；HNSW 只留给巨型仓
-/// 墓碑占比超过此值应 compact。
-pub const TOMBSTONE_REBUILD_RATIO: f32 = 0.2;
-
-/// 召回引擎：持真相快照（rows）+ 活跃集合（alive）+ 可选 HNSW 影子图。
+/// 召回引擎：一次性真相快照（open 后只读；GC 发生在下次构建的事务里）。
 pub struct RecallEngine {
     embed: EmbedClient,
     rows: Vec<(Chunk, Vec<f32>)>,
-    alive: HashSet<usize>,
-    hnsw: Option<Hnsw<'static, f32, DistCosine>>,
     /// P007 R2.13：meta（model/dim）与当前嵌入客户端是否一致——
-    /// 不一致时暴力路径 zip 截断余弦会产生无意义相似度，召回必须拒绝而非硬算。
+    /// 不一致时 zip 截断余弦会产生无意义相似度，召回必须拒绝而非硬算。
     meta_ok: bool,
 }
 
 impl RecallEngine {
-    /// 从已填充的索引库构建。meta 中的 model/维度与 embed 客户端不一致时降级暴力并省略 HNSW。
+    /// 从已填充的索引库构建。
     pub fn open(store: VectorStore, embed: EmbedClient) -> CsResult<Self> {
         let rows = store.load_all()?;
         let model_ok = store.get_meta("model")?.as_deref() == Some(embed.model.as_str());
         // P005 R6.1：全行维度校验（原只看第一行——首行正常、后续行损坏时会静默漏检）
         let dim_ok = rows.iter().all(|(_, v)| v.len() as u32 == embed.dimensions);
-        let mut alive = HashSet::new();
-        for i in 0..rows.len() {
-            alive.insert(i);
-        }
-        let mut engine = Self {
+        Ok(Self {
             embed,
             rows,
-            alive,
-            hnsw: None,
             meta_ok: model_ok && dim_ok,
-        };
-        if engine.rows.len() >= MIN_HNSW_SIZE && model_ok && dim_ok {
-            engine.build_hnsw();
-        }
-        Ok(engine)
-    }
-
-    fn build_hnsw(&mut self) {
-        let n = self.rows.len();
-        let hnsw = Hnsw::new(HNSW_M, n, HNSW_MAX_LAYER, HNSW_EF_CONSTRUCTION, DistCosine);
-        let datas: Vec<(&[f32], usize)> = self
-            .rows
-            .iter()
-            .enumerate()
-            .map(|(i, (_, v))| (v.as_slice(), i))
-            .collect();
-        hnsw.parallel_insert_slice(&datas);
-        self.hnsw = Some(hnsw);
-    }
-
-    /// 墓碑一个行号（更新/删除的旧块）。
-    pub fn tombstone(&mut self, row: usize) {
-        self.alive.remove(&row);
-    }
-
-    pub fn tombstone_count(&self) -> usize {
-        self.rows.len() - self.alive.len()
-    }
-
-    /// 墓碑超阈值 → 需要压缩（丢死行、重编号、重建图）。
-    pub fn needs_compact(&self) -> bool {
-        let dead = self.rows.len() - self.alive.len();
-        !self.rows.is_empty() && (dead as f32 / self.rows.len() as f32) > TOMBSTONE_REBUILD_RATIO
-    }
-
-    /// 压缩：丢死行重编号，重建图。
-    pub fn compact(&mut self) {
-        let mut new_rows = Vec::with_capacity(self.alive.len());
-        for i in 0..self.rows.len() {
-            if self.alive.contains(&i) {
-                new_rows.push(self.rows[i].clone());
-            }
-        }
-        self.rows = new_rows;
-        self.alive = (0..self.rows.len()).collect();
-        self.hnsw = None;
-        if self.rows.len() >= MIN_HNSW_SIZE {
-            self.build_hnsw();
-        }
+        })
     }
 
     /// 按向量召回（同步）：返回 (row 序号, 余弦相似度)，相似度降序。
     pub fn recall_by_vector(&self, qv: &[f32], k: usize) -> Vec<(usize, f32)> {
-        if let Some(hnsw) = &self.hnsw {
-            let knbn = (k * OVERFETCH_FACTOR).min(self.alive.len().max(1));
-            let mut scored: Vec<(usize, f32)> = hnsw
-                .search(qv, knbn, HNSW_EF_SEARCH)
-                .into_iter()
-                .filter(|n| self.alive.contains(&n.d_id))
-                .map(|n| {
-                    let row = n.d_id;
-                    (row, cosine(&self.rows[row].1, qv))
-                })
-                .collect();
-            scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            scored.truncate(k);
-            scored
-        } else {
-            let mut scored: Vec<(usize, f32)> = self
-                .alive
-                .iter()
-                .map(|&i| (i, cosine(&self.rows[i].1, qv)))
-                .collect();
-            scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            scored.truncate(k);
-            scored
-        }
+        let mut scored: Vec<(usize, f32)> = self
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(i, (_, v))| (i, cosine(v, qv)))
+            .collect();
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(k);
+        scored
     }
 
-    /// 文本查询（异步）：指令前缀嵌入 → 三段式召回。查询侧走 Qwen3 指令感知前缀。
+    /// 文本查询（异步）：指令前缀嵌入 → 精确余弦召回。查询侧走 Qwen3 指令感知前缀。
     pub async fn recall(&self, query: &str, k: usize) -> CsResult<Vec<(Chunk, f32)>> {
         // P007 R2.13：meta 不一致时拒绝召回——跨模型/跨维度 zip 截断余弦是无意义分数，
         // 误导 agent；诚实报错并指向重建
@@ -230,47 +146,15 @@ mod tests {
     }
 
     #[test]
-    fn warm_start_brute_respects_alive() {
-        // 2026-10-05 用户硬要求「暖启动零负担」：千级向量走精确暴力（MIN_HNSW_SIZE=100k），
-        // 会话启动零 HNSW 重建成本；墓碑语义在暴力路径下同样成立。
-        let (_dir, mut engine) = engine_for(16, 1200);
-        assert!(
-            engine.hnsw.is_none(),
-            "千级向量应走精确暴力（暖启动零负担）"
-        );
+    fn large_index_still_exact_brute() {
+        // 2026-10-05 用户拍板「暖启动零负担」：千级向量全量精确暴力，确定性结果
+        let (_dir, engine) = engine_for(16, 1200);
         let qv = hot_query(16, 9);
         let hits = engine.recall_by_vector(&qv, 5);
         assert!(!hits.is_empty());
-        assert!(hits.iter().all(|(i, _)| engine.alive.contains(i)));
         assert!(
             hits.iter().all(|(_, s)| (*s - 1.0).abs() < 1e-4),
             "方向匹配应近似 1.0: {hits:?}"
-        );
-        // 墓碑 top-1 后不再出现
-        let top = hits[0].0;
-        engine.tombstone(top);
-        let hits2 = engine.recall_by_vector(&qv, 5);
-        assert!(hits2.iter().all(|(i, _)| *i != top));
-        assert_eq!(engine.tombstone_count(), 1);
-        assert!(!engine.needs_compact());
-    }
-
-    #[test]
-    fn compact_renumbers_and_rebuilds() {
-        let (_dir, mut engine) = engine_for(16, 1200);
-        for i in 0..1000 {
-            engine.tombstone(i);
-        }
-        assert!(engine.needs_compact());
-        engine.compact();
-        assert_eq!(engine.rows.len(), 200);
-        assert_eq!(engine.tombstone_count(), 0);
-        let qv = hot_query(16, 1005); // 存活行：1005 未被墓碑（0..1000 已碑）
-        let hits = engine.recall_by_vector(&qv, 3);
-        assert!(!hits.is_empty());
-        assert!(
-            hits.iter().all(|(_, s)| (*s - 1.0).abs() < 1e-4),
-            "{hits:?}"
         );
     }
 
@@ -297,7 +181,6 @@ mod tests {
         store.set_meta("model", "other-model").unwrap();
         let embed = EmbedClient::new("https://x.example", "k", "test-model", 8);
         let engine = RecallEngine::open(store, embed).unwrap();
-        assert!(engine.hnsw.is_none(), "模型不一致不得建图");
         let rt = tokio::runtime::Runtime::new().unwrap();
         let err = rt
             .block_on(engine.recall("query", 3))

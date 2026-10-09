@@ -25,9 +25,7 @@ pub struct Cli {
     /// 目标仓库根目录
     #[arg(long, value_name = "PATH")]
     pub repo: Option<PathBuf>,
-    /// 限定检索范围（glob，可多次）
-    #[arg(long, value_name = "GLOB")]
-    pub focus: Vec<String>,
+    // P007 R4.2：--focus 已删（全链路零消费的假旗标，曾误导「限定检索范围」）
     /// 输出格式（D018）：report=人类模板（默认）· raw=仅模型正文（不套报告壳）· json=结构化报告
     #[arg(long, value_enum, default_value_t = OutputFormat::Report)]
     pub output_format: OutputFormat,
@@ -86,9 +84,7 @@ pub enum Command {
     Index {
         /// 目标仓库路径
         path: PathBuf,
-        /// 结构索引重建提示（实际入口：run --fresh-index；本旗标不单独记录状态）
-        #[arg(long)]
-        rebuild: bool,
+        // P007 R4.3：--rebuild 已删（诚实报错假旗标；实际入口 run --fresh-index）
         /// 构建向量索引（嵌入 + text_hash 增量）
         #[arg(long)]
         vector: bool,
@@ -124,11 +120,7 @@ impl Cli {
         };
         match self.command {
             Some(Command::Config { action }) => run_config(action, self.profile.as_deref()),
-            Some(Command::Index {
-                path,
-                rebuild,
-                vector,
-            }) => {
+            Some(Command::Index { path, vector }) => {
                 if vector {
                     match Self::run_index_vector(&overrides, &path) {
                         Ok(()) => 0,
@@ -138,7 +130,8 @@ impl Cli {
                         }
                     }
                 } else {
-                    let e = index_structure_error(rebuild);
+                    // P007 R4.3：--rebuild 旗标已删，非 --vector 一律诚实报错
+                    let e = index_structure_error();
                     report_error(&e);
                     e.exit_code()
                 }
@@ -558,19 +551,14 @@ impl Cli {
     }
 }
 
-/// `index` 子命令非 --vector 的诚实报错（P005 R7.3 交互澄清）：
-/// 结构索引由 codegraph 在 run 时按需自建，--rebuild 从不「记录」任何状态——
-/// 重建的唯一入口是 run --fresh-index。原「--rebuild 已记录」是不实描述，删除。
-fn index_structure_error(rebuild: bool) -> CsError {
+/// `index` 子命令非 --vector 的诚实报错：结构索引由 codegraph 在 run 时按需自建，
+/// 重建的唯一入口是 run --fresh-index（P007 R4.3：--rebuild 旗标已删，无参分支）。
+fn index_structure_error() -> CsError {
     CsError::new(
         INDEX_NOT_AVAILABLE,
         "index 子命令仅支持 --vector（结构索引由 codegraph 在 run 时按需自建）",
     )
-    .with_hint(if rebuild {
-        "结构索引重建：codesleuth run --fresh-index（--rebuild 不单独记录状态）".to_string()
-    } else {
-        "向量索引请加 --vector".to_string()
-    })
+    .with_hint("结构索引重建：codesleuth run --fresh-index；向量索引请加 --vector")
 }
 
 fn run_config(action: ConfigAction, profile: Option<&str>) -> i32 {
@@ -888,13 +876,13 @@ mod tests {
     /// P005 R7.3：index 非 --vector 的报错必须诚实——不再声称「--rebuild 已记录」。
     #[test]
     fn index_structure_hint_is_honest() {
-        let e = index_structure_error(true);
+        // P007 R4.3：--rebuild 已删，无参分支；hint 指向唯一真实入口
+        let e = index_structure_error();
         assert!(e.to_string().contains("仅支持 --vector"));
         let hint = e.hint.as_deref().unwrap();
         assert!(hint.contains("--fresh-index"));
+        assert!(hint.contains("--vector"));
         assert!(!hint.contains("已记录"), "不许再撒谎: {hint}");
-        let e2 = index_structure_error(false);
-        assert!(e2.hint.as_deref().unwrap().contains("--vector"));
     }
 
     /// P005 R7.1：嵌入供应商缺省跟随 [llm]，显式 [vector] 覆盖优先。
@@ -948,10 +936,7 @@ mod tests {
             "任务",
             "--repo",
             "r",
-            "--focus",
-            "a/**",
-            "--focus",
-            "b/**",
+            // P007 R4.2：--focus 已删
             "--output-format",
             "json",
             "--out",
@@ -964,7 +949,6 @@ mod tests {
             "-vv",
         ])
         .unwrap();
-        assert_eq!(cli.focus.len(), 2);
         assert_eq!(cli.output_format, OutputFormat::Json);
         assert!(cli.fresh_index);
         assert_eq!(cli.verbose, 2);
@@ -987,11 +971,13 @@ mod tests {
                 action: ConfigAction::Path
             })
         ));
-        let cli = Cli::try_parse_from(["codesleuth", "index", ".", "--rebuild"]).unwrap();
+        let cli = Cli::try_parse_from(["codesleuth", "index", ".", "--vector"]).unwrap();
         assert!(matches!(
             cli.command,
-            Some(Command::Index { rebuild: true, .. })
+            Some(Command::Index { vector: true, .. })
         ));
+        // P007 R4.3：--rebuild 已删，传它应直接解析失败
+        assert!(Cli::try_parse_from(["codesleuth", "index", ".", "--rebuild"]).is_err());
     }
 
     #[test]
