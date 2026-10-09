@@ -1,6 +1,7 @@
 //! 向量索引存储（P003 E1a · Q3 已定）：SQLite 单文件 + BLOB 向量，Rust 侧检索。
 //!
-//! 真相原则：vectors.db 是嵌入索引的唯一持久真相；HNSW 图是会话内影子（E1b）。
+//! 真相原则：vectors.db 是嵌入索引的唯一持久真相（P007 R4.1 后无会话内影子图，
+//! 召回引擎直接全量加载本库做精确余弦）。
 //! 增量：text_hash 未变的 chunk 直接复用旧向量（embed 调用零开销）。
 
 use crate::errors::{CsError, CsResult, INDEX_NOT_AVAILABLE};
@@ -157,11 +158,8 @@ impl VectorStore {
         Ok(map)
     }
 
-    /// 写入/覆盖一个 chunk 及其向量。
-    pub fn upsert_chunk(&self, chunk: &Chunk, vector: &[f32]) -> CsResult<()> {
-        Self::upsert_chunk_on(&self.conn, chunk, vector)
-    }
-
+    // P007 R4.8：upsert_chunk 公开包装已删——测试直调 upsert_chunk_on；
+    // 生产唯一写路径 commit_build → upsert_chunk_on
     /// upsert 的连接参数化内核（P005 R3）：同一写入逻辑可在事务内复用。
     fn upsert_chunk_on(conn: &Connection, chunk: &Chunk, vector: &[f32]) -> CsResult<()> {
         conn.execute(
@@ -228,7 +226,7 @@ impl VectorStore {
             .map_err(|e| CsError::new(INDEX_NOT_AVAILABLE, format!("计数失败: {e}")))
     }
 
-    /// 全量加载（重建 HNSW 影子图的原料）。
+    /// 全量加载（召回引擎的真相快照；P007 R4.1 后无影子图重建一说）。
     pub fn load_all(&self) -> CsResult<Vec<(Chunk, Vec<f32>)>> {
         let mut stmt = self
             .conn
@@ -335,8 +333,8 @@ mod tests {
         let store = VectorStore::open(&db).unwrap();
         let c1 = mk_chunk("a.rs", "keep_me", 1, "fn keep() {}");
         let c2 = mk_chunk("a.rs", "dead_fn", 20, "fn dead() {}");
-        store.upsert_chunk(&c1, &[0.5f32, 0.5]).unwrap();
-        store.upsert_chunk(&c2, &[0.25f32, 0.75]).unwrap();
+        VectorStore::upsert_chunk_on(&store.conn, &c1, &[0.5f32, 0.5]).unwrap();
+        VectorStore::upsert_chunk_on(&store.conn, &c2, &[0.25f32, 0.75]).unwrap();
         let k2 = chunk_key(&c2);
         assert_eq!(store.count().unwrap(), 2);
 
@@ -357,8 +355,8 @@ mod tests {
         let c1 = mk_chunk("src/a.rs", "alpha", 1, "alpha body");
         let c2 = mk_chunk("src/a.rs", "beta", 10, "beta body");
         let v = vec![0.1f32, 0.2, 0.3];
-        store.upsert_chunk(&c1, &v).unwrap();
-        store.upsert_chunk(&c2, &v).unwrap();
+        VectorStore::upsert_chunk_on(&store.conn, &c1, &v).unwrap();
+        VectorStore::upsert_chunk_on(&store.conn, &c2, &v).unwrap();
         assert_eq!(store.count().unwrap(), 2);
 
         // 增量：已有 hash 集合命中 → 复用，不再嵌入
@@ -367,7 +365,7 @@ mod tests {
 
         // 覆盖写（同 key 更新）
         let v2 = vec![0.4f32, 0.5, 0.6];
-        store.upsert_chunk(&c1, &v2).unwrap();
+        VectorStore::upsert_chunk_on(&store.conn, &c1, &v2).unwrap();
         assert_eq!(store.count().unwrap(), 2);
 
         let all = store.load_all().unwrap();

@@ -94,10 +94,12 @@ mod tests {
     use super::*;
 
     /// 方向唯一化：v[i%dim]=1.0 + v[(7i+3)%dim]=0.5，确保每行方向不同（gcd(7,dim)=1 时）。
+    /// 经公开写入口 commit_build 落库（R4.8 后无单写包装）。
     fn store_with(n: usize, dim: usize) -> (tempfile::TempDir, VectorStore, Vec<usize>) {
         let dir = tempfile::tempdir().unwrap();
         let store = VectorStore::open(&dir.path().join("v.db")).unwrap();
         let mut specials = Vec::new();
+        let mut updates: Vec<(Chunk, Vec<f32>)> = Vec::new();
         for i in 0..n {
             let mut v = vec![0.0f32; dim];
             v[i % dim] = 1.0;
@@ -113,11 +115,14 @@ mod tests {
                 text: format!("text {i}"),
                 text_hash: format!("h{i}"),
             };
-            store.upsert_chunk(&chunk, &v).unwrap();
+            updates.push((chunk, v));
             if i % 7 == 3 {
                 specials.push(i);
             }
         }
+        store
+            .commit_build(&[], &updates, "test-model", dim as u32, "Raw")
+            .unwrap();
         store.set_meta("model", "test-model").unwrap();
         (dir, store, specials)
     }
