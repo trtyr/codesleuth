@@ -22,7 +22,10 @@ impl ReadTool {
     }
 }
 
-/// 行哈希锚点（12-bit，3 位 hex）：行内容一变锚点即失效，防张冠李戴。
+/// 行哈希锚点（12-bit，3 位 hex）：行内容一变锚点大概率失效——
+/// P007 R3.26 口径修正：12-bit 空间仅 4096 种值，不同行碰撞概率 ≈1/4096，
+/// 单个 200 行窗口内碰撞概率约百分之几；锚点是提示性校验，非强保证，
+/// 引用准确性仍以行内容为准。
 fn line_hash(line: &str) -> u16 {
     let d = sha2::Sha256::digest(line.as_bytes());
     (((d[0] as u16) << 4) | ((d[1] as u16) >> 4)) & 0x0FFF
@@ -72,16 +75,23 @@ impl Tool for ReadTool {
                     .with_hint(r#"{"path": "src/main.rs"}"#)
             })?
             .to_string();
-        let offset = args
-            .get("offset")
-            .and_then(Value::as_u64)
-            .unwrap_or(1)
-            .max(1) as usize;
-        let limit = args
-            .get("limit")
-            .and_then(Value::as_u64)
+        // P007 R3.8：非法/越限参数不再纯静默归一——实际生效值在输出头本就可见
+        // （显示 {offset}-{end} 行），此处补一行归一说明，诚实可纠
+        let raw_offset = args.get("offset").and_then(Value::as_u64);
+        let raw_limit = args.get("limit").and_then(Value::as_u64);
+        let offset = raw_offset.unwrap_or(1).max(1) as usize;
+        let limit = raw_limit
             .unwrap_or(DEFAULT_LIMIT as u64)
             .clamp(1, MAX_LIMIT as u64) as usize;
+        let mut normalize_note = String::new();
+        if raw_offset.is_none() && args.get("offset").is_some() {
+            normalize_note.push_str("；offset 非法已归一为 1");
+        }
+        if let Some(l) = raw_limit
+            && (l < 1 || l > MAX_LIMIT as u64)
+        {
+            normalize_note.push_str(&format!("；limit {l} 越限已钳到 {limit}"));
+        }
 
         let resolved = self.fence.resolve(&path_arg)?;
         if !resolved.is_file() {
@@ -119,7 +129,7 @@ impl Tool for ReadTool {
 
         let end = (offset.saturating_sub(1) + limit).min(total);
         let mut out = format!(
-            "[read] {path_arg} · 共 {total} 行 · 显示 {offset}-{end} 行{}\n",
+            "[read] {path_arg} · 共 {total} 行 · 显示 {offset}-{end} 行{}{normalize_note}\n",
             if lossy {
                 " · 含非 UTF-8 字节（已用 U+FFFD 替换）"
             } else {

@@ -94,14 +94,17 @@ mod tests {
 
     #[tokio::test]
     async fn empty_index_reports_gracefully_without_panic() {
-        // 空库 + 不可达嵌入端点：execute 不得 panic，错误必须结构化（网络路径由真机验收覆盖）
+        // P007 R3.22：旧断言 is_err() || is_ok() 恒真零检验力——空库 + 不可达嵌入端点
+        // 必须返回结构化错误（网络路径由真机验收覆盖）
         let t = tool();
         let out = t
             .execute(serde_json::json!({"query": "重试", "k": 999}))
             .await;
+        let err = out.expect_err("空库 + 不可达端点必须结构化报错");
         assert!(
-            out.is_err() || out.is_ok(),
-            "允许 Err（嵌入不可达）或 Ok（空结果提示）"
+            err.code.0 / 1000 == 4 || err.code.0 / 1000 == 5,
+            "错误码应在索引/内部段位: {:?}",
+            err.code
         );
     }
 

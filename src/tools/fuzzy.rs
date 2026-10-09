@@ -176,7 +176,9 @@ impl Tool for GrepTool {
             page_limit: limit,
             mode,
             time_budget_ms: 5000,
-            enforce_time_budget: false,
+            // P007 R3.9：预算写而不启是模块注释承诺的降级前提未落实——启用之，
+            // 大仓超时返回部分结果（配合上方诚实截断提示）
+            enforce_time_budget: true,
             before_context: 0,
             after_context: 0,
             classify_definitions: true,
@@ -203,9 +205,10 @@ impl Tool for GrepTool {
             ));
         }
         if result.next_file_offset > 0 {
+            // P007 R3.9：旧提示给出调用方无法执行的续读指令（本工具不暴露 file_offset 参数），
+            // 诱导 LLM 原样重调撞去重拒绝；改为诚实可执行的指引
             out.push_str(&format!(
-                "…还有更多文件未扫（file_offset={}）\n",
-                result.next_file_offset
+                "…（结果可能不完整：仅返回前 {limit} 命中，且尚有未扫描文件。请收窄 pattern（加路径约束）或提高 limit 重试）\n",
             ));
         }
         Ok(out)

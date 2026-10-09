@@ -17,6 +17,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// 只读允许清单（D011：explore/callers/callees/impact/files 仅转发 codegraph MCP 查询，无写面）。
+/// P007 R3.21：补齐 vector_search 与 harness 内置 submit_report/recall，
+/// 使「全部注册工具 ⊆ 允许清单」命门断言重新覆盖真实工具面（含 --vector）。
 const READ_ONLY_TOOLS: &[&str] = &[
     "read",
     "find_files",
@@ -26,6 +28,9 @@ const READ_ONLY_TOOLS: &[&str] = &[
     "callees",
     "impact",
     "files",
+    "vector_search",
+    "submit_report",
+    "recall",
 ];
 
 fn build_registry(root: &Path) -> ToolRegistry {

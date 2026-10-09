@@ -2,7 +2,10 @@
 //!
 //! 生命周期：`start`（索引缺失则一次性 `codegraph init`；force 则重建；然后 spawn
 //! `codegraph serve --mcp` 并完成 initialize 握手）→ 会话内五工具复用 → Drop 回收 server。
-//! `CODEGRAPH_NO_DAEMON=1` 保证每会话独占进程；增量同步交给 server 的 connect-time catch-up。
+//! P007 R3.23：独占性实际由 Arc 所有权 + Drop start_kill 保证（旧注释声称设
+//! CODEGRAPH_NO_DAEMON=1，代码从未设置——已删该虚假承诺）；
+//! 子进程只注入 CODEGRAPH_TELEMETRY=0 与 DO_NOT_TRACK=1。增量同步交给 server 的
+//! connect-time catch-up。
 
 use crate::errors::{
     CsError, CsResult, INDEX_BUILD_FAILED, INDEX_NOT_AVAILABLE, INDEX_TIMEOUT, USER_INPUT,
@@ -75,9 +78,21 @@ async fn run_cli(bin: &str, args: &[&str], cwd: &Path) -> CsResult<()> {
     })?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
+        // P007 R3.23：stderr 为空时不再只给通用 hint——stdout 里的诊断一并入错误消息
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let detail = if !stderr.trim().is_empty() {
+            stderr.to_string()
+        } else if !stdout.trim().is_empty() {
+            format!(
+                "（stderr 为空，stdout 诊断）{}",
+                crate::llm::safe_prefix(stdout.trim(), 500)
+            )
+        } else {
+            String::new()
+        };
         let mut err = CsError::new(
             INDEX_BUILD_FAILED,
-            format!("codegraph {} 失败: {}", args.join(" "), stderr),
+            format!("codegraph {} 失败: {}", args.join(" "), detail),
         );
         // codegraph 锁竞争时 stderr 为空（2026-10-05 事故实测）：给不出根因就给出路
         if stderr.trim().is_empty() {
@@ -236,7 +251,7 @@ cg_symbol_tool!(
 cg_symbol_tool!(
     CalleesTool,
     "callees",
-    "这个符号调用了谁（结构图正向边）。args: {symbol}"
+    "这个符号调用了谁（结构图正向边）。args: {symbol, limit?, depth?}"
 );
 cg_symbol_tool!(
     ImpactTool,

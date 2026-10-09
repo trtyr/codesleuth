@@ -3,7 +3,7 @@
 //! 顺序请求-响应（单会话单 agent），服务端主动通知一律忽略。
 //! 锁用 tokio::sync::Mutex（guard 可跨 await 且 Send）。
 
-use crate::errors::{CsError, CsResult, INDEX_BUILD_FAILED, INDEX_NOT_AVAILABLE, INDEX_TIMEOUT};
+use crate::errors::{CsError, CsResult, INDEX_NOT_AVAILABLE, INDEX_TIMEOUT};
 use serde_json::{Value, json};
 use std::io::ErrorKind;
 use std::path::Path;
@@ -37,20 +37,22 @@ pub fn response_id(v: &Value) -> Option<u64> {
     v.get("id").and_then(Value::as_u64)
 }
 
-/// tools/call 响应 → 拼接 text 内容；isError 视为工具错误。
+/// tools/call 响应 → 拼接 text 内容。
+/// P007 R3.16：错误码语义归位——工具调用期失败不再是 INDEX_BUILD_FAILED（那是
+/// 构建期错误码，误导排查方向）：isError/空内容 → INDEX_NOT_AVAILABLE；
+/// 空内容（符号不存在/无结果）是合法查询结果而非故障，返回说明性文本零误差。
 pub fn extract_tool_text(resp: &Value) -> CsResult<String> {
     let text = content_text(resp);
     if resp["result"]["isError"].as_bool() == Some(true) {
         return Err(CsError::new(
-            INDEX_BUILD_FAILED,
+            INDEX_NOT_AVAILABLE,
             format!("codegraph 工具错误: {text}"),
         ));
     }
     if text.trim().is_empty() {
-        return Err(CsError::new(
-            INDEX_BUILD_FAILED,
-            "codegraph 返回空内容（符号不存在或索引未就绪？）",
-        ));
+        // 空内容 = 查询无结果（符号不存在/索引未就绪）：诚实回显给模型自纠，
+        // 不当错误抛（Err 会烧 no_progress 且误导为故障）
+        return Ok("（codegraph 返回空内容——符号不存在或索引未就绪；换符号名或先 explore）".into());
     }
     Ok(text)
 }
@@ -192,8 +194,9 @@ impl McpClient {
             };
             if response_id(&v) == Some(id) {
                 if let Some(err) = v.get("error") {
+                    // P007 R3.16：请求级协议错误归 INDEX_NOT_AVAILABLE（非构建期）
                     return Err(CsError::new(
-                        INDEX_BUILD_FAILED,
+                        INDEX_NOT_AVAILABLE,
                         format!("MCP error: {err}"),
                     ));
                 }

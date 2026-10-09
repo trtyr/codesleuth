@@ -85,7 +85,14 @@ pub fn acquire(repo_root: &Path, timeout: Duration) -> CsResult<BootLock> {
             return Ok(BootLock::Won(BootLockGuard { file }));
         }
         Err(std::fs::TryLockError::Error(e)) => {
-            return Err(CsError::new(INDEX_LOCKED, format!("引导锁获取失败: {e}")));
+            // P007 R3.16：首试硬错误（ENOLCK/EACCES/NFS 不支持等）保留原始错误作根因，
+            // 不再只报「锁获取失败」让人误以为竞争超时；错误码仍归 INDEX_LOCKED 段位
+            return Err(CsError::new(
+                INDEX_LOCKED,
+                format!("引导锁获取失败（非竞争性硬错误）: {e}"),
+            )
+            .with_source(format!("flock try_lock: {e}"))
+            .with_hint("检查文件系统是否支持 flock（如 NFS 挂载）或目录权限"));
         }
         Err(std::fs::TryLockError::WouldBlock) => {}
     }

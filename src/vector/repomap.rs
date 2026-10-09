@@ -1,14 +1,15 @@
 //! repo map 预算化注入（P003 E2 · 设计稿 §2）：codegraph 符号 + 边表度数中心度排序，
 //! token 预算（字符预算 ≈ 6k token × 4）封顶贪心装填，小仓全图、大仓头部。
-//! 注入位置 = system prompt 尾部「[repo map]」段（稳定事实性内容 + 查证指引）。
+//! P007 R3.18 口径修正：注入位置 = 首条 user 消息后缀（D005 分层，harness
+//! with_first_user_suffix），不是 system prompt——旧注释误导。
 
 use crate::errors::{CsError, CsResult, INDEX_NOT_AVAILABLE};
 use std::collections::HashMap;
 use std::path::Path;
 
-/// 默认字符预算（≈6k token）。
-pub const DEFAULT_BUDGET_CHARS: usize = 24_000;
 /// 单符号行预算上限（防止超长 qualified name 吃光预算）。
+/// 默认字符预算已迁至 config.vector.repomap_budget（config.rs，可配置），
+/// P007 R3.18：删除双源漂移的死常量 DEFAULT_BUDGET_CHARS。
 pub const MAX_LINE_CHARS: usize = 200;
 
 pub struct MapSymbol {
@@ -131,6 +132,11 @@ pub fn build_task_map(
             entries.len()
         ));
     }
+    if out.is_empty() {
+        // P007 R3.18：空符号库不再注入矛盾文案（「[repo map]」+ 查证指引），
+        // 对齐 build_repo_map 的同场景兑底
+        out.push_str("（仓库无符号索引）\n");
+    }
     out
 }
 
@@ -177,7 +183,7 @@ pub fn build_repo_map(
     out
 }
 
-/// system prompt 注入段（含查证指引）。
+/// user 消息后缀注入段（含查证指引；P007 R3.18 口径修正，非 system prompt）。
 pub fn wrap_repo_section(map: &str) -> String {
     format!("[repo map]\n{map}\n结构详情勿凭此图推断，用 explore / callers / callees 查证。")
 }

@@ -1,7 +1,10 @@
 //! LLM provider 抽象（Q001/D009）：OpenAI 兼容协议，async-openai + 自定义 base_url。
 //! 重试/退避在本层做；最终失败后 retryable=false（宿主不再重试）。
 
-use crate::errors::{CsError, CsResult, LLM_BAD_RESPONSE, LLM_RATE_LIMITED, LLM_UNREACHABLE};
+use crate::errors::{
+    CONFIG_MISSING, CsCode, CsError, CsResult, LLM_BAD_RESPONSE, LLM_RATE_LIMITED, LLM_SERVER,
+    LLM_UNREACHABLE,
+};
 use async_openai::types::chat::{
     ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls,
     ChatCompletionRequestAssistantMessage, ChatCompletionRequestMessage,
@@ -244,7 +247,8 @@ impl LlmProvider for OpenAiProvider {
         let mut last: Option<CsError> = None;
         for attempt in 0..attempts {
             if attempt > 0 {
-                // 指数退避：500ms / 1s / 2s / 4s（封顶）
+                // 指数退避：实现为 500ms << attempt（attempt 从 1 起）= 1s / 2s / 4s / 8s（封顶）。
+                // P007 R3.15：注释曾写 500ms/1s/2s/4s，与实现不符，已同步。
                 tokio::time::sleep(Duration::from_millis(500u64 << attempt.min(4))).await;
             }
             let outcome = self
@@ -259,18 +263,14 @@ impl LlmProvider for OpenAiProvider {
                     let status = resp.status();
                     if !status.is_success() {
                         let snippet = resp.text().await.unwrap_or_default();
-                        let ce = if status.as_u16() == 429 || status.is_server_error() {
-                            CsError::new(
-                                LLM_RATE_LIMITED,
-                                format!("LLM HTTP {status}: {}", safe_prefix(&snippet, 200)),
-                            )
-                            .with_retryable(true)
-                        } else {
-                            CsError::new(
-                                LLM_BAD_RESPONSE,
-                                format!("LLM HTTP {status}: {}", safe_prefix(&snippet, 200)),
-                            )
-                        };
+                        // P007 R3.1：分类单一事实源——生产路径与测试共用 classify_llm_error，
+                        // 5xx 归 LLM_SERVER（不再误报速率限制）
+                        let (code, retryable) = classify_llm_error(Some(status.as_u16()), &snippet);
+                        let ce = CsError::new(
+                            code,
+                            format!("LLM HTTP {status}: {}", safe_prefix(&snippet, 200)),
+                        )
+                        .with_retryable(retryable);
                         if ce.retryable && attempt + 1 < attempts {
                             tracing::warn!("LLM 第 {} 次调用失败（可重试）: {}", attempt + 1, ce);
                             last = Some(ce);
@@ -279,7 +279,29 @@ impl LlmProvider for OpenAiProvider {
                         tracing::error!("LLM 调用终局失败: {ce}");
                         return Err(ce.with_retryable(false));
                     }
-                    match Self::decode_response(&resp.text().await.unwrap_or_default()) {
+                    // P007 R3.2：200 状态下响应体读取失败（网关中途断连）不再吞成空串——
+                    // 那会被 decode_response 错分类为不可重试 CS2004；本质是传输瞬断，可重试
+                    let body = match resp.text().await {
+                        Ok(t) => t,
+                        Err(e) => {
+                            let ce = CsError::new(
+                                LLM_UNREACHABLE,
+                                format!("LLM 响应体读取失败（连接中断？）: {e}"),
+                            )
+                            .with_retryable(true);
+                            if attempt + 1 < attempts {
+                                tracing::warn!(
+                                    "LLM 第 {} 次调用失败（可重试）: {}",
+                                    attempt + 1,
+                                    ce
+                                );
+                                last = Some(ce);
+                                continue;
+                            }
+                            return Err(ce.with_retryable(false));
+                        }
+                    };
+                    match Self::decode_response(&body) {
                         Ok(resp) => return map_response(resp),
                         Err(e) => {
                             tracing::error!("LLM 调用终局失败: {e}");
@@ -309,9 +331,8 @@ impl LlmProvider for OpenAiProvider {
 /// Arc 便利别名。
 pub type SharedProvider = Arc<dyn LlmProvider>;
 
-#[cfg(test)]
-use crate::errors::{CONFIG_MISSING, CsCode, LLM_SERVER};
-#[cfg(test)]
+/// P007 R3.1：LLM 错误分类单一事实源（原为 #[cfg(test)] 影子分类器且与生产分叉——
+/// 生产把 5xx 归 LLM_RATE_LIMITED，测试归 LLM_SERVER）。现生产 chat() 直调本函数。
 fn classify_llm_error(status: Option<u16>, body: &str) -> (CsCode, bool) {
     let lower = body.to_lowercase();
     match status {

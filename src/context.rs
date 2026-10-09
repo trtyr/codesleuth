@@ -23,6 +23,9 @@ fn msg_chars(m: &ChatMessage) -> usize {
 }
 
 /// 估算当前窗口 token（chars/4 启发式）。
+/// 债务登记（P007 R3.20）：CJK 内容真实 token 约为 chars/4 的 4 倍——本仓工具
+/// 输出主体是中文时估算低估，真实窗口可能先于压缩触发耗尽；压缩阈值的
+/// 40% 余量只能部分兑底。已声明启发式，待实测教训再升级（如 chars/2 或分词）。
 pub fn estimate_tokens(messages: &[ChatMessage]) -> usize {
     messages.iter().map(msg_chars).sum::<usize>() / 4
 }

@@ -32,7 +32,19 @@ pub async fn build_vector_index(
         .map_err(|e| CsError::new(REPO_NOT_FOUND, format!("仓库路径无效: {e}")))?;
     let fp = fingerprint(&repo_abs);
     let db_path = repo_abs.join(".codegraph").join("codegraph.db");
-    let nodes = crate::vector::chunk::symbols_from_codegraph(&db_path).unwrap_or_default();
+    // P007 R3.19：codegraph 读取失败不再静默——符号边界真源失效退化为全文
+    // text 切块是显著质量降级，至少 warn 一次
+    let nodes = match crate::vector::chunk::symbols_from_codegraph(&db_path) {
+        Ok(n) => n,
+        Err(e) => {
+            tracing::warn!(
+                component = "vector_build",
+                error = %e,
+                "codegraph 符号读取失败，退化全文 text 切块（符号边界失效）"
+            );
+            Default::default()
+        }
+    };
     let chunks = plan_chunks(&repo_abs, &nodes)?;
 
     let store = VectorStore::open(&index_path(state_dir, &fp))?;

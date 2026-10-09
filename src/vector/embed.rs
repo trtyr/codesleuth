@@ -12,8 +12,9 @@ use serde_json::Value;
 pub const QUERY_INSTRUCT: &str =
     "Instruct: 给定代码库的自然语言问题，检索能回答它的代码片段\nQuery: ";
 
-/// 嵌入批并发（2026-10-04 用户拍板加速：串行 141 批 ~10 分钟 → 并发 3 约 1/3；网关速率限制口径）。
-pub const EMBED_CONCURRENCY: usize = 4; // 嵌入调用轻于 LLM 生成，温和档上浮一档（用户拍板「调一个合适的并发」）
+/// 嵌入批并发（2026-10-04 用户拍板加速；P007 R3.19 注释同步：当前值 4，
+/// 网关速率限制口径；嵌入调用轻于 LLM 生成）。
+pub const EMBED_CONCURRENCY: usize = 4;
 
 pub fn instruct_query(query: &str) -> String {
     format!("{QUERY_INSTRUCT}{query}")
@@ -160,22 +161,23 @@ impl EmbedClient {
                     .with_retryable(true)
             })?;
         let status = resp.status();
-        let value: Value = resp.json().await.map_err(|e| {
-            CsError::new(INDEX_EMBED_FAILED, format!("embeddings 响应解析失败: {e}"))
-        })?;
+        // P007 R3.16：先取 status——非 2xx 且错误体非 JSON（网关 HTML 502 页）时，
+        // 旧实现 json() 先失败把 HTTP 状态码和 retryable 分类全部吞掉
         if !status.is_success() {
-            let snippet = value.to_string();
+            let body = resp.text().await.unwrap_or_default();
             let retryable = status.as_u16() == 429 || status.is_server_error();
-            // P007 R2.7：复用 llm::safe_prefix 字符边界安全截断（单一实现，不造第二把刀）
             return Err(CsError::new(
                 INDEX_EMBED_FAILED,
                 format!(
                     "embeddings HTTP {status}: {}",
-                    crate::llm::safe_prefix(&snippet, 200)
+                    crate::llm::safe_prefix(&body, 200)
                 ),
             )
             .with_retryable(retryable));
         }
+        let value: Value = resp.json().await.map_err(|e| {
+            CsError::new(INDEX_EMBED_FAILED, format!("embeddings 响应解析失败: {e}"))
+        })?;
         let mut data: Vec<(usize, Vec<f32>)> = value["data"]
             .as_array()
             .ok_or_else(|| CsError::new(INDEX_EMBED_FAILED, "embeddings 响应缺 data 数组"))?

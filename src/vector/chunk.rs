@@ -249,7 +249,10 @@ fn is_comment_line(line: &str) -> bool {
     t.starts_with("///")
         || t.starts_with("//")
         || t.starts_with("#")
-        || t.starts_with("*")
+        // P007 R3.19：仅匹配块注释延续行（" * "/"*/"），不再把以 * 开头的
+        // 普通代码行（解引用/指针表达式）误判为注释吸收进上一符号块
+        || t.starts_with("* ")
+        || t == "*"
         || t.starts_with("/*")
         || t.starts_with("\"\"\"")
 }

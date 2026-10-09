@@ -19,7 +19,18 @@ pub fn info_keys(output: &str) -> Vec<String> {
 }
 
 fn path_like(t: &str) -> bool {
-    t.len() >= 3 && (t.contains('/') || t.contains('.')) && !t.contains("://")
+    if t.len() < 3 || t.contains("://") {
+        return false;
+    }
+    if t.contains('/') {
+        return true;
+    }
+    // P007 R3.14：裸点号 token（3.14 / 1.2.3 等版本号/小数）不再入库——
+    // 末段必须含字母才认作路径形（package.json ✓，1.2.3 ✗）
+    matches!(
+        t.rsplit_once('.'),
+        Some((_, last)) if !last.is_empty() && last.chars().any(|c| c.is_ascii_alphabetic())
+    )
 }
 
 /// 证据库：会话内真实观察过的路径 → 首次观察的审计 seq（submit_report 校验 + 互查锚点）。

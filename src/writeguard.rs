@@ -8,6 +8,9 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::Path;
 
+// P007 R3.29 债务登记：精确大小写匹配是平台假设——Windows 大小写不敏感文件系统下
+// `.Codegraph`/`Target`/`Dist` 不会被豁免（伪「不可归因变更」误报）；且 `build`/`out`/
+// `.next`/`vendor` 等常见构建目录不在表内，活仓库易持续误报（不眒报，灵敏度问题）。
 const SKIP_DIRS: &[&str] = &[
     ".git",
     ".codegraph",

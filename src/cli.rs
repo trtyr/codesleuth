@@ -398,10 +398,7 @@ impl Cli {
             Err(e) => {
                 tracing::warn!(component = "codegraph", error = %e, "codegraph 未就绪，结构工具降级（其余继续）");
                 // P005 R5.2：非致命降级进审计留痕（最佳 effort，不留痕失败不掩主流程）
-                let _ = audit_log.record(
-                    "degraded",
-                    &serde_json::json!({"component": "codegraph", "error": e.to_string()}),
-                );
+                record_degraded(&audit_log, "codegraph", &e);
                 None
             }
         };
@@ -424,7 +421,7 @@ impl Cli {
             } else {
                 tracing::info!("# codegraph 无符号索引（非代码仓）：图工具未注册");
                 parts.push(
-                    "〔地形提示〕本仓库无结构图索引（非代码仓或未建索引）：explore/callers/callees/impact 不可用。                     请用 find_files（带关键词）与 grep（带内容模式）探索，用 read 阅读具体文件。"
+                    "〔地形提示〕本仓库无结构图索引（非代码仓或未建索引）：explore/callers/callees/impact 不可用。请用 find_files（带关键词）与 grep（带内容模式）探索，用 read 阅读具体文件。"
                         .into(),
                 );
             }
@@ -454,10 +451,7 @@ impl Cli {
                 Err(e) => {
                     tracing::warn!(component = "vector_layer", error = %e, "向量层装配失败（本会话无召回层，任务继续）");
                     // P005 R5.2：非致命降级进审计留痕
-                    let _ = audit_log.record(
-                        "degraded",
-                        &serde_json::json!({"component": "vector_layer", "error": e.to_string()}),
-                    );
+                    record_degraded(&audit_log, "vector_layer", &e);
                 }
             }
         }
@@ -477,10 +471,7 @@ impl Cli {
                 Err(e) => {
                     tracing::warn!(component = "repo_map", error = %e, "导航图构建失败（跳过注入）");
                     // P005 R5.2：非致命降级进审计留痕
-                    let _ = audit_log.record(
-                        "degraded",
-                        &serde_json::json!({"component": "repo_map", "error": e.to_string()}),
-                    );
+                    record_degraded(&audit_log, "repo_map", &e);
                 }
             }
         }
@@ -602,16 +593,22 @@ fn run_config(action: ConfigAction, profile: Option<&str>) -> i32 {
                 e.exit_code()
             }
         },
-        ConfigAction::Set { key, value } => match config_set(key, value) {
-            Ok(path) => {
-                println!("已写入 {}", path.display());
-                0
+        ConfigAction::Set { key, value } => {
+            // P007 R3.5：--profile 对 set 不生效（写的是全局文件视图），不再静默忽略
+            if profile.is_some() {
+                eprintln!("# 提示: --profile 对 config set 不生效（档位只在 run 时选用）");
             }
-            Err(e) => {
-                report_error(&e);
-                e.exit_code()
+            match config_set(key, value) {
+                Ok(path) => {
+                    println!("已写入 {}", path.display());
+                    0
+                }
+                Err(e) => {
+                    report_error(&e);
+                    e.exit_code()
+                }
             }
-        },
+        }
     }
 }
 
@@ -624,6 +621,15 @@ struct VectorLayerCtx<'a> {
     rt: &'a tokio::runtime::Runtime,
     /// P005 R5.2：内层非致命降级（构建失败/召回失败）也进审计留痕
     audit: &'a audit::Audit,
+}
+
+/// P007 R3.28：非致命降级留痕单一入口——散弹式修改病灶收敛（改留痕格式只动这里）。
+/// best-effort：留痕失败不掩主流程。
+fn record_degraded(audit: &crate::audit::Audit, component: &str, error: impl std::fmt::Display) {
+    let _ = audit.record(
+        "degraded",
+        &serde_json::json!({"component": component, "error": error.to_string()}),
+    );
 }
 
 /// 嵌入供应商解析（P005 R7.1，coupling 审查去重）：[vector].base_url/api_key 缺省跟随 [llm]。
@@ -693,10 +699,7 @@ fn setup_vector_layer(
                     Err(e) => {
                         tracing::warn!(component = "vector_build", error = %e, "向量索引构建失败（降级：尝试复用已有索引）");
                         // P005 R5.2：非致命降级进审计留痕（best-effort）
-                        let _ = ctx.audit.record(
-                            "degraded",
-                            &serde_json::json!({"component": "vector_build", "error": e.to_string()}),
-                        );
+                        record_degraded(ctx.audit, "vector_build", &e);
                     }
                 }
                 drop(vguard); // 构建段结束即放锁（D014：锁不跨 LLM 调用、不罩检索）
@@ -733,7 +736,16 @@ fn setup_vector_layer(
             return Ok(None);
         }
     };
-    let recall = Arc::new(vector::RecallEngine::open(store, embed)?);
+    // P007 R3.27：召回引擎打开失败不再 `?` 上抛打穿整个任务（单行损坏即致命）——
+    // 对齐函数承诺的「向量不可用 → Ok(None) 弹性降级不致命」
+    let recall = match vector::RecallEngine::open(store, embed) {
+        Ok(r) => Arc::new(r),
+        Err(e) => {
+            tracing::warn!(component = "vector_recall", error = %e, "召回引擎打开失败（本会话无召回层，任务继续）");
+            record_degraded(ctx.audit, "vector_recall", &e);
+            return Ok(None);
+        }
+    };
     registry.register(Box::new(tools::vector_search::VectorSearchTool::new(
         Arc::clone(&recall),
     )));
@@ -743,10 +755,7 @@ fn setup_vector_layer(
         Err(e) => {
             tracing::warn!(component = "recall", error = %e, "召回失败（跳过注入）");
             // P005 R5.2：非致命降级进审计留痕（best-effort）
-            let _ = ctx.audit.record(
-                "degraded",
-                &serde_json::json!({"component": "recall", "error": e.to_string()}),
-            );
+            record_degraded(ctx.audit, "recall", &e);
             Vec::new()
         }
     };
@@ -787,7 +796,9 @@ fn setup_vector_layer(
                 parts.push(vector::repomap::wrap_repo_section(&map));
             }
             Err(e) => {
+                // P007 R3.17：五处降级留痕唯一漏的这一处补齐——与同函数其他降级一致
                 tracing::warn!("导航图构建失败（跳过注入）: {e}");
+                record_degraded(ctx.audit, "repo_map", &e);
             }
         }
     }
@@ -813,7 +824,9 @@ fn config_get(key: Option<String>, profile: Option<&str>) -> CsResult<String> {
 
 fn config_set(key: String, value: String) -> CsResult<PathBuf> {
     let path = config::global_config_path().ok_or_else(|| {
-        CsError::new(CONFIG_MISSING, "找不到用户配置目录").with_hint("检查 XDG_CONFIG_HOME / HOME")
+        // P007 R3.6：hint 不再提从不参与的 XDG_CONFIG_HOME（实际只 dirs::home_dir()）
+        CsError::new(CONFIG_MISSING, "找不到用户主目录")
+            .with_hint("检查 HOME 环境变量或用户目录配置")
     })?;
     let mut fc = if path.exists() {
         config::parse_file(&path)?

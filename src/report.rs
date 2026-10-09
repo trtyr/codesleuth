@@ -57,18 +57,17 @@ impl Report {
     }
 
     pub fn validate(&self) -> CsResult<()> {
+        // P007 R3.3：报告内容校验不再借用 INDEX_BUILD_FAILED（误导为索引故障、exit 5）——
+        // 语义即输出契约（CS2005，与 harness 契约校验同码）
         if !matches!(self.confidence.as_str(), "high" | "medium" | "low") {
             return Err(CsError::new(
-                crate::errors::INDEX_BUILD_FAILED,
+                crate::errors::OUTPUT_CONTRACT,
                 format!("非法置信度: {}", self.confidence),
             )
             .with_hint("只允许 high | medium | low"));
         }
         if self.answer.trim().is_empty() {
-            return Err(CsError::new(
-                crate::errors::INDEX_BUILD_FAILED,
-                "answer 为空",
-            ));
+            return Err(CsError::new(crate::errors::OUTPUT_CONTRACT, "answer 为空"));
         }
         Ok(())
     }
@@ -81,7 +80,13 @@ impl Report {
         out.push_str("## 结论\n");
         out.push_str(&format!("{}\n\n", self.answer));
         if self.findings.is_empty() {
-            out.push_str("## 证据列表\n（无结构化发现——降级报告）\n\n");
+            // P007 R3.4：零 findings + dead_ends 的合法非降级报告不再被误标「降级」
+            let note = if self.degraded {
+                "（无结构化发现——降级报告）"
+            } else {
+                "（无结构化发现；参见死胡同）"
+            };
+            out.push_str(&format!("## 证据列表\n{note}\n\n"));
         } else {
             out.push_str("## 证据列表\n");
             for (i, f) in self.findings.iter().enumerate() {
@@ -182,8 +187,22 @@ mod tests {
     fn validate_rejects_bad_confidence() {
         let mut r = sample();
         r.confidence = "超高".into();
-        assert!(r.validate().is_err());
+        let err = r.validate().unwrap_err();
+        // P007 R3.3：报告校验错误码 = OUTPUT_CONTRACT，不再误用 INDEX_BUILD_FAILED
+        assert_eq!(err.code, crate::errors::OUTPUT_CONTRACT);
         r.confidence = "high".into();
         assert!(r.validate().is_ok());
+    }
+
+    #[test]
+    fn zero_findings_with_dead_ends_is_not_rendered_as_degraded() {
+        // P007 R3.4 回归：合法零 findings + dead_ends 报告（degraded=false）
+        // 不再被渲染成「降级报告」
+        let mut r = sample();
+        r.findings.clear();
+        assert!(!r.degraded);
+        let out = r.render_human();
+        assert!(out.contains("无结构化发现；参见死胡同"));
+        assert!(!out.contains("降级报告"));
     }
 }

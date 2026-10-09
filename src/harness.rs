@@ -369,8 +369,24 @@ impl Harness {
                             .await?;
                         continue;
                     };
-                    let from = a.get("from").and_then(Value::as_u64).unwrap_or(0);
-                    let to = a.get("to").and_then(Value::as_u64).unwrap_or(from);
+                    // P007 R3.7：from/to 缺参不再静默归一（from=0/to=from 静默回空范围，
+                    // 模型在盲区打转）——显式打回并计熔断
+                    let (Some(from), Some(to)) = (
+                        a.get("from").and_then(Value::as_u64),
+                        a.get("to").and_then(Value::as_u64),
+                    ) else {
+                        no_progress += 1;
+                        if let Some(fuse) = fuse_if_hit(no_progress, &self.audit)? {
+                            return Err(fuse);
+                        }
+                        self.reject_call(
+                            call,
+                            "recall 缺少 from/to 参数（均为必填整数）。示例：{\"from\":1,\"to\":50}。",
+                            &mut messages,
+                        )
+                        .await?;
+                        continue;
+                    };
                     let lines = self.audit.read_range(from, to)?;
                     executed += 1;
                     self.audit.record(
@@ -462,7 +478,7 @@ impl Harness {
                 match tool.execute(args).await {
                     Ok(output) => {
                         executed += 1;
-                        self.audit.record(
+                        let result_seq = self.audit.record(
                             "tool_result",
                             &serde_json::json!({"tool_call_seq": seq, "name": call.name, "output": output}),
                         )?;
@@ -474,7 +490,9 @@ impl Harness {
                             self.evidence
                                 .lock()
                                 .unwrap_or_else(|p| p.into_inner())
-                                .observe_exact(p, seq);
+                                // P007 R3.13：锚 tool_result 行（含 output 原文）而非只有 args 的
+                                // tool_call 行——报告↔审计互查不再半盲
+                                .observe_exact(p, result_seq);
                         }
                         let keys = info_keys(&output);
                         let gain = keys.iter().any(|k| seen_keys.insert(k.clone()));
@@ -502,6 +520,12 @@ impl Harness {
                         }
                     }
                     Err(e) => {
+                        // P007 R3.12：失败也落 tool_result 审计行——否则 tool_call 成孤儿，
+                        // recall 钻取只见调用不见失败原因
+                        let _ = self.audit.record(
+                            "tool_result",
+                            &serde_json::json!({"tool_call_seq": seq, "name": call.name, "error": e.to_string()}),
+                        );
                         // 工具执行错误也是无进展步（P004 T2.1）：否则坏模型可用千变参数无限触发
                         // 错误空转，永远不触熔断。错误回显给模型后照常计熔断。
                         no_progress += 1;
@@ -1403,7 +1427,7 @@ mod tests {
             .filter(|v| v["seq"].as_u64() == Some(seq))
             .collect();
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0]["kind"], "tool_call");
+        assert_eq!(hits[0]["kind"], "tool_result");
         assert_eq!(hits[0]["name"], "read");
         drop(dir);
     }

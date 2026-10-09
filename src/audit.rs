@@ -74,16 +74,21 @@ impl Audit {
                 .with_hint(format!("状态目录: {}", dir.display()))
         })?;
         let path = dir.join(format!("{session_id}.jsonl"));
-        // 单代轮转（P004 T4）：超过上限时旧文件让位（.old），审计磁盘占用不无界增长。
-        // 代价：轮转后 recall 无法读旧代已被驱逐的原文——64MB 上限下单会话极难触发。
+        // 单代轮转（P004 T4）：超过上限时旧文件让位，审计磁盘占用不无界增长。
+        // P007 R3.10：旧实现直接覆盖 .old（更早一代无提示丢失）——改带时间戳后缀；
+        // 轮转后新代 seq 从 1 重新起号（文件级代际，播种子保证重入不撞号）
         const AUDIT_MAX_BYTES: u64 = 64 * 1024 * 1024;
         if let Ok(meta) = std::fs::metadata(&path)
             && meta.len() > AUDIT_MAX_BYTES
         {
-            let rotated = dir.join(format!("{session_id}.jsonl.old"));
+            let mut rotated = dir.join(format!("{session_id}.jsonl.old"));
+            if rotated.exists() {
+                // 旧 .old 已存在：带时间戳让位，不静默覆盖丢史实
+                rotated = dir.join(format!("{session_id}.jsonl.old.{}", now_ms()));
+            }
             match std::fs::rename(&path, &rotated) {
                 Ok(()) => tracing::warn!(
-                    "审计文件超 {} MB，已轮转到 {}",
+                    "审计文件超 {} MB，已轮转到 {}（新代 seq 重新起号，recall 不再读旧代）",
                     AUDIT_MAX_BYTES / (1024 * 1024),
                     rotated.display()
                 ),
@@ -95,10 +100,25 @@ impl Audit {
             .append(true)
             .open(&path)
             .map_err(|e| CsError::new(INTERNAL, format!("打开审计文件失败: {e}")))?;
+        // P007 R3.10：从已有文件播种 seq——同 session_id 重入时不再写出重复 seq
+        // （旧行为从 0 起号，「按 seq 单调不重」被破）
+        let seeded = std::fs::read_to_string(&path)
+            .map(|content| {
+                content
+                    .lines()
+                    .filter_map(|l| {
+                        serde_json::from_str::<serde_json::Value>(l)
+                            .ok()
+                            .and_then(|v| v.get("seq").and_then(serde_json::Value::as_u64))
+                    })
+                    .max()
+                    .unwrap_or(0)
+            })
+            .unwrap_or(0);
         Ok(Self {
             path,
             file: Mutex::new(file),
-            seq: AtomicU64::new(0),
+            seq: AtomicU64::new(seeded),
         })
     }
 
@@ -120,10 +140,11 @@ impl Audit {
             let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
                 continue;
             };
-            let s = v
-                .get("seq")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0);
+            let s = match v.get("seq").and_then(serde_json::Value::as_u64) {
+                Some(s) => s,
+                // P007 R3.10：无/非法 seq 的损坏行不再冒充 seq 0 参与召回
+                None => continue,
+            };
             if s >= from && s <= to {
                 out.push((s, v));
             }
@@ -170,6 +191,33 @@ impl Audit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// P007 R3.10：重入播种——同 session_id 重建 Audit 时 seq 从已有最大值续号，
+    /// 不再写出重复 seq；损坏行（无/非法 seq）被 read_range 跳过不冒充 seq 0
+    #[test]
+    fn reopen_seeds_seq_and_skips_corrupt_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let audit = Audit::create(dir.path(), "s1").unwrap();
+            audit.record("a", &serde_json::json!({"i": 1})).unwrap();
+            audit.record("a", &serde_json::json!({"i": 2})).unwrap();
+        }
+        // 手工追加一行损坏内容（模拟外部截断/编辑）
+        use std::io::Write as _;
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(dir.path().join("audit").join("s1.jsonl"))
+            .unwrap();
+        writeln!(f, "{{broken json").unwrap();
+        {
+            let audit = Audit::create(dir.path(), "s1").unwrap();
+            let n = audit.record("b", &serde_json::json!({"i": 3})).unwrap();
+            assert_eq!(n, 3, "重入必须从已有最大 seq 续号");
+            let lines = audit.read_range(1, 3).unwrap();
+            assert_eq!(lines.len(), 3, "损坏行不得混入召回");
+            assert!(lines.iter().all(|(s, _)| (1..=3).contains(s)));
+        }
+    }
 
     #[test]
     fn audit_records_monotonic_lines() {

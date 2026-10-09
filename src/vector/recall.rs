@@ -1,7 +1,8 @@
 //! 召回引擎（P003 E1b · 设计稿 §3）：SQLite 真相 + 会话内 HNSW 影子图 + 三段式查询。
 //!
 //! 三段式：① HNSW k×3 超采（ef_search=64）→ ② 候选精确重算余弦 → ③ 墓碑过滤取 top-K。
-//! <1000 向量走暴力（该量级 HNSW 无收益且更精确）；墓碑超 20% 触发 compact。
+//! P007 R3.19 口径同步：MIN_HNSW_SIZE=100_000（2026-10-05 用户拍板暖启动零负担，
+//! 旧注释「<1000 向量走暴力」已失真）；墓碑超 20% 触发 compact。
 
 use crate::errors::{CsError, CsResult, INDEX_NOT_AVAILABLE};
 use crate::vector::chunk::Chunk;

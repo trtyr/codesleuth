@@ -5,6 +5,7 @@
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// 单代轮转阈值（与审计 64MB 同款）。
@@ -15,6 +16,9 @@ pub const LOG_ROTATE_BYTES: u64 = 64 * 1024 * 1024;
 pub struct SessionLog {
     inner: Arc<Mutex<File>>,
     path: PathBuf,
+    max_bytes: u64,
+    /// P007 R3.11：运行期累计写入量——旧实现只在 open 时检查一次，长会话可无限超限
+    written: Arc<AtomicU64>,
 }
 
 impl SessionLog {
@@ -37,7 +41,37 @@ impl SessionLog {
         Ok(Self {
             inner: Arc::new(Mutex::new(file)),
             path: path.to_path_buf(),
+            max_bytes,
+            written: Arc::new(AtomicU64::new(0)),
         })
+    }
+
+    /// P007 R3.11：运行期轮转——累计写入越过阈值时旧文件让位。
+    /// rename 失败用 eprintln 可见化（open 阶段 tracing 尚未初始化，注释里
+    /// 声称的「warn 由调用方日志可见」从未成立）。
+    fn maybe_rotate(&self) {
+        let written = self.written.load(Ordering::Relaxed);
+        if written < self.max_bytes {
+            return;
+        }
+        let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        // 双检：拿到锁后重置计数（并发写者只轮转一次）
+        if self.written.swap(0, Ordering::Relaxed) < self.max_bytes {
+            return;
+        }
+        let old = self.path.with_extension("log.old");
+        if let Err(e) = std::fs::rename(&self.path, &old) {
+            eprintln!("# 会话日志运行期轮转失败（继续追加超限文件）: {e}");
+            return;
+        }
+        match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+        {
+            Ok(f) => *inner = f,
+            Err(e) => eprintln!("# 会话日志轮转后重开失败: {e}"),
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -47,6 +81,8 @@ impl SessionLog {
 
 impl Write for SessionLog {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.written.fetch_add(buf.len() as u64, Ordering::Relaxed);
+        self.maybe_rotate();
         self.inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())

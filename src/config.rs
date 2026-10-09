@@ -356,8 +356,14 @@ pub fn config_key_table() -> &'static [ConfigKey] {
         },
         ConfigKey {
             name: "llm.profile",
-            // D017：只读键——档位经 [llm.profiles.<名字>] 定义，运行时 --profile 选用
-            get: |c| c.active_profile.clone().unwrap_or_else(|| "default".into()),
+            // D017：只读键——档位经 [llm.profiles.<名字>] 定义，运行时 --profile 选用。
+            // P007 R3.5：无档位时返回空串（配合键表 hint），不再虚构 "default"——
+            // 那不是任何已定义档位名，误导脚本消费方
+            get: |c| {
+                c.active_profile
+                    .clone()
+                    .unwrap_or_else(|| "（未选用档位）".into())
+            },
             set: |_fc, _v| {
                 Err(CsError::new(
                     CONFIG_INVALID,
@@ -505,7 +511,12 @@ pub fn to_file_view(cfg: &Config) -> FileConfig {
             model: Some(cfg.llm.model.clone()),
             profiles: Default::default(),
         },
-        context: FileContext::default(),
+        context: FileContext {
+            // P007 R3.5：生效的 context 配置不再被硬编码 default 丢弃——
+            // 全量视图承诺「打印生效配置（全部）」
+            model_context_tokens: Some(cfg.context.model_context_tokens),
+            compact_at_percent: Some(cfg.context.compact_at_percent),
+        },
         vector: FileVector {
             embed_model: Some(cfg.vector.embed_model.clone()),
             embed_dims: Some(cfg.vector.embed_dims),
@@ -542,6 +553,21 @@ impl Config {
 mod tests {
     use super::*;
 
+    /// P007 R3.5 回归：config get 全量视图包含生效的 context 值，不再硬编码 default
+    #[test]
+    fn to_file_view_includes_effective_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("c.toml");
+        write(
+            &p,
+            "[context]\nmodel_context_tokens = 123456\ncompact_at_percent = 70\n",
+        );
+        let cfg = load_layered(None, Some(&p), CliOverrides::default()).unwrap();
+        let view = to_file_view(&cfg);
+        assert_eq!(view.context.model_context_tokens, Some(123456));
+        assert_eq!(view.context.compact_at_percent, Some(70));
+    }
+
     /// P005 R7.2：键表全键 set → 写盘 → load → get 闭环 + 未知键报错。
     #[test]
     fn key_table_roundtrip_and_unknown_key() {
@@ -566,7 +592,8 @@ mod tests {
         for k in config_key_table() {
             let got = resolved_get(&cfg, k.name).unwrap();
             let want = if READ_ONLY_KEYS.contains(&k.name) {
-                "default"
+                // P007 R3.5：无档位不再虚构 "default"
+                "（未选用档位）"
             } else {
                 expected_value(k.name)
             };
@@ -620,7 +647,8 @@ mod tests {
     }
 
     #[test]
-    fn precedence_cli_beats_env_beats_project_beats_global() {
+    fn precedence_cli_beats_project_beats_global() {
+        // P007 R3.6：env 层已移除，测试名去 env 残留
         let dir = tempfile::tempdir().unwrap();
         let g = dir.path().join("g.toml");
         let p = dir.path().join("p.toml");
