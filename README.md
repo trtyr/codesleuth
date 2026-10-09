@@ -8,7 +8,7 @@
 
 [![tests](https://img.shields.io/badge/tests-90_passing-brightgreen)](scripts/ci.sh)
 [![eval](https://img.shields.io/badge/eval-45%2F45_hardgate-brightgreen)](scripts/eval/run_eval.py)
-[![rust](https://img.shields.io/badge/rust-1.88%2B-orange)](Cargo.toml)
+[![rust](https://img.shields.io/badge/rust-1.89%2B-orange)](Cargo.toml)
 [![license](https://img.shields.io/badge/license-MIT-blue)](#license)
 
 ```bash
