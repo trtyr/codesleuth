@@ -1,0 +1,14 @@
+# 微观 · 配置管理子命令（config-cmd）
+
+> 置信度 medium · 8 条发现 · 245759 tokens
+
+config 子命令链路总体实现干净（键表驱动 get/set 同表、只读键拒绝、未知键 CS1012、错误码/退出码段位映射正确），但存在 3 个真实缺陷：①【P1·数据一致性】cli.rs:737-757 `config set` 对全局 config.toml 采用「读→内存改→fs::write 整文件覆盖」，无临时文件+rename 原子写，写入中途崩溃/断电会留下半截 TOML，下次任何 `config::load`（影响所有子命令与 run 主链路）都在 parse_file 处报 CONFIG_INVALID 整体失败；②【P2·数据丢失（部分覆盖）】`config set` 的写入面只覆盖键表中可 set 的 14 键所对应的 FileConfig 字段，但 FileConfig 还含 `llm.profiles`（BTreeMap）。虽然当前 `apply_set` 是就地修改 parse_file 读出的 fc、profiles 会随序列化保留，真正的丢数据窗口在「文件不存在时以 FileConfig::default() 起步」（无损失）与「手工编辑的文件中含未知键」——toml 反序列化 FileConfig 用 `#[serde(default)]` 但无 `deny_unknown_fields`，未知顶层段/键会被静默丢弃后再写回，用户手工加的注释与自定义段在下次 `config set` 后无声消失；③【P2·信息误导】(a) `config get`（无 key 全量输出）经 toml::to_string_pretty(to_file_view(cfg)) 序列化，而 to_file_view 把 context 段硬编码为 FileContext::default()（config.rs:508），声称「打印生效配置（全部）」但 context.model_context_tokens / compact_at_percent 完全不显示，且展示值混入 CLI 覆盖与 profile 效果，并非可复用的配置文件内容；(b) 键表 get 的 `llm.profile` 无档位时返回 "default"（config.rs:360）——"default" 并非任何已定义档位名，纯虚构占位值，误导脚本消费方。另有一处 P3 文档/行为偏差：config_set 的 CONFIG_MISSING hint 提示「检查 XDG_CONFIG_HOME / HOME」（cli.rs:739），但目录实际来自 dirs::home_dir()，与 XDG_CONFIG_HOME 无关（config.rs:160-162）。死代码维度：本链路内未发现确定死代码；config.rs:174-176 `project_config_path_legacy` 被自身 load 使用（有引用），键表 14 键全部可达；唯一疑似是 `llm.profile` 这个只读展示键——它使 get 输出 "default" 的行为比不存在更糟，最值得先清理/先修。bug 密度最高文件：src/cli.rs（config_set/config_get 所在）。最值得先修的一件事：config set 改为「临时文件 + rename」原子写并考虑 serde(flatten) 或保留注释策略，兼顾丢失窗口修复。
+
+1. P1：config set 写盘非原子（fs::write 直接覆盖 ~/.codesleuth/config.toml），中途失败产生半截 TOML，后续所有 config::load 均报 CONFIG_INVALID；上游防线不成立：config_set 无任何临时文件/备份机制，parse_file 对损坏文件直接报错不恢复（src/cli.rs:741-757、src/config.rs:179-188）
+2. P2：parse_file→FileConfig 反序列化对未知段/键静默丢弃（无 deny_unknown_fields），config set 读改写回后用户手工注释与自定义段无声消失；触发条件=用户手工编辑过配置文件后执行任意 config set（src/cli.rs:741-746、src/config.rs:10-22）
+3. P2：`config get` 全量输出丢失 context 段——to_file_view 把 FileContext 硬编码为 default()，model_context_tokens/compact_at_percent 不展示，与「打印生效配置（全部）」的命令文档不符（文档面：cli.rs:100-103 注释称缺省打印全部）（src/config.rs:500-524、src/cli.rs:729-735）
+4. P2：键 llm.profile 的 get 无档位时返回虚构值 "default"，非真实档位名，误导消费方；set 拒绝逻辑本身正确（只读键）（src/config.rs:357-367）
+5. P3：CONFIG_MISSING hint 提示『检查 XDG_CONFIG_HOME / HOME』，但 global_config_path 只用 dirs::home_dir()，XDG_CONFIG_HOME 从不参与，hint 误导（src/cli.rs:738-740、src/config.rs:159-167）
+6. 干净面验证：apply_set/resolved_get 键表驱动同表共用、find_key 未知键统一 CS1012、数值键经 parse_typed 类型校验、bool 键单独校验——逐键核对 14 键 set/get 与 merge_file/load_layered 数据流一致（除上述 findings）（src/config.rs:477-497、src/config.rs:331-466）
+7. 退出码链路正确：run_config 对 Get/Set 错误统一 report_error + exit_code()，CONFIG_MISSING(1011)/CONFIG_INVALID(1012) 均 1000..=1099 段映射 exit 2，与 cli.rs 头注释承诺一致（src/errors.rs:12-23、src/cli.rs:543-562）
+8. 入口派发正确：main→Cli::run→Some(Command::Config)→run_config(action, self.profile)；profile 旗标正确传入 config_get 用于档位解析，config set 不受 profile 影响（写文件视图语义一致）（src/main.rs:5-11、src/cli.rs:125-126、src/cli.rs:533-564）

@@ -15,6 +15,30 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// P007 R1.6：对手释放锁但产物缺失时的重试上限。
+const LOST_ARTIFACT_RETRIES: u32 = 3;
+
+/// R1.6 决策核（纯函数便于测试）：OpponentFinished 分支的下一步。
+#[derive(Debug, PartialEq, Eq)]
+enum LostStep {
+    /// 产物就绪，直接 serve
+    Proceed,
+    /// 产物缺失，重新竞争引导锁
+    Retry,
+    /// 连续多次对手都没留下产物（疑似反复崩溃），放弃并报错
+    Fail,
+}
+
+fn lost_step(artifact_exists: bool, retries: u32) -> LostStep {
+    if artifact_exists {
+        LostStep::Proceed
+    } else if retries >= LOST_ARTIFACT_RETRIES {
+        LostStep::Fail
+    } else {
+        LostStep::Retry
+    }
+}
+
 #[derive(Debug)]
 pub struct CodegraphEngine {
     client: McpClient,
@@ -75,23 +99,53 @@ impl CodegraphEngine {
     async fn start_with_bin(root: &Path, bin: &str, force_reindex: bool) -> CsResult<Self> {
         // D014：索引引导（init/force）进仓库级引导锁，进程间串行化；
         // D020：等待后获得 = 对手刚完成引导，索引已就绪——跳过 init/force 直接进 serve。
-        match crate::bootlock::acquire_guard(
-            root,
-            crate::bootlock::DEFAULT_TIMEOUT,
-            "codegraph 索引引导",
-        )? {
-            crate::bootlock::BootLockOutcome::Won(guard) => {
-                if force_reindex {
-                    run_cli(bin, &["index", "--force", "--quiet"], root).await?;
-                } else if !root.join(".codegraph").exists() {
-                    run_cli(bin, &["init"], root).await?;
+        // P007 R1.6：Lost≠「对手成功完成」——对手可能在 init/index --force 半途崩溃
+        // （内核放锁，产物缺失/残缺），此时不得在空 .codegraph 上直接 serve；
+        // 重新竞争引导锁（上限 LOST_ARTIFACT_RETRIES 次），超限诚实报错。
+        let mut lost_retries: u32 = 0;
+        loop {
+            match crate::bootlock::acquire_guard(
+                root,
+                crate::bootlock::DEFAULT_TIMEOUT,
+                "codegraph 索引引导",
+            )? {
+                crate::bootlock::BootLockOutcome::Won(guard) => {
+                    if force_reindex {
+                        run_cli(bin, &["index", "--force", "--quiet"], root).await?;
+                    } else if !root.join(".codegraph").exists() {
+                        run_cli(bin, &["init"], root).await?;
+                    }
+                    drop(guard); // 引导段结束即放锁；serve 阶段不持锁（D014）
+                    break;
                 }
-                drop(guard); // 引导段结束即放锁；serve 阶段不持锁（D014）
-            }
-            crate::bootlock::BootLockOutcome::OpponentFinished => {
-                tracing::warn!(
-                    "对手进程刚完成 codegraph 索引引导，本进程复用其产物直接进 serve（D020）"
-                );
+                crate::bootlock::BootLockOutcome::OpponentFinished
+                    if root.join(".codegraph").exists() =>
+                {
+                    tracing::warn!(
+                        "对手进程刚完成 codegraph 索引引导，本进程复用其产物直接进 serve（D020）"
+                    );
+                    break;
+                }
+                crate::bootlock::BootLockOutcome::OpponentFinished => {
+                    match lost_step(false, lost_retries) {
+                        LostStep::Fail => {
+                            return Err(
+                                CsError::new(
+                                    crate::errors::INDEX_LOCKED,
+                                    "对手进程释放引导锁但未留下 .codegraph 产物（疑似多次中途崩溃）",
+                                )
+                                .with_hint("删除目标仓库的 .codesleuth/boot.lock 后重试，或手动运行 codegraph init"),
+                            );
+                        }
+                        LostStep::Retry => {
+                            lost_retries += 1;
+                            tracing::warn!(
+                                "对手释放引导锁但 .codegraph 缺失（对手疑似中途崩溃），重新竞争引导锁（{lost_retries}/{LOST_ARTIFACT_RETRIES}）"
+                            );
+                        }
+                        LostStep::Proceed => unreachable!("artifact_exists=false 不会判 Proceed"),
+                    }
+                }
             }
         }
         let client = McpClient::spawn(bin, &["serve", "--mcp"], root).await?;
@@ -275,6 +329,15 @@ impl Tool for FilesTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lost_artifact_step_decides_retry_then_fail() {
+        // P007 R1.6 回归：产物就绪直接 serve；缺失先重试，达上限后判失败而非裸 serve
+        assert_eq!(lost_step(true, 0), LostStep::Proceed);
+        assert_eq!(lost_step(false, 0), LostStep::Retry);
+        assert_eq!(lost_step(false, LOST_ARTIFACT_RETRIES - 1), LostStep::Retry);
+        assert_eq!(lost_step(false, LOST_ARTIFACT_RETRIES), LostStep::Fail);
+    }
 
     #[tokio::test]
     async fn missing_binary_is_structured_error() {

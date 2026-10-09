@@ -274,6 +274,11 @@ pub fn plan_chunks(repo_root: &Path, nodes: &[SymbolRow]) -> CsResult<Vec<Chunk>
         let Some(lines) = read_lines(&abs) else {
             continue;
         };
+        if lines.is_empty() {
+            // P007 R1.5：codegraph 陈旧符号 + 空文件——符号路径的切片钳位在空 Vec 上越界
+            // panic（fallback 路径 418 行有同款防护，此处补齐）；跳过该文件
+            continue;
+        }
         let lang = syms.first().map(|s| s.language.clone()).unwrap_or_default();
 
         // 容器丢弃 + 文档行上提
@@ -477,6 +482,30 @@ pub fn plan_chunks(repo_root: &Path, nodes: &[SymbolRow]) -> CsResult<Vec<Chunk>
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn stale_codegraph_symbol_on_empty_file_is_skipped() {
+        // P007 R1.5 回归：codegraph 陈旧符号 + 磁盘文件被清空 → 跳过该文件，不 panic
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/empty.rs"), "").unwrap();
+        let nodes = vec![SymbolRow {
+            name: "ghost".into(),
+            kind: "function".into(),
+            file_path: "src/empty.rs".into(),
+            start_line: 1,
+            end_line: 5,
+            language: "rust".into(),
+            docstring: None,
+            signature: None,
+        }];
+        let chunks = plan_chunks(dir.path(), &nodes).unwrap();
+        assert!(
+            chunks.is_empty(),
+            "空文件应被跳过，实际 {} chunks",
+            chunks.len()
+        );
+    }
 
     fn write_file(dir: &Path, rel: &str, content: &str) -> PathBuf {
         let p = dir.join(rel);

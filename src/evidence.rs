@@ -36,19 +36,13 @@ impl EvidenceStore {
         self.paths.entry(path.to_string()).or_insert(seq);
     }
 
-    /// 已观察路径清单（FINDING-012 零 findings 打回用）。
+    /// 已观察路径清单（FINDING-012 零 findings 打回用）。只列真实读过内容的路径。
     pub fn observed_paths(&self) -> Vec<String> {
         self.paths.keys().cloned().collect()
     }
 
-    pub fn observe(&mut self, output: &str, seq: u64) {
-        for tok in output.split(|c: char| c.is_whitespace() || "[]()<>\"'`,;".contains(c)) {
-            let t = tok.trim_matches(|c| c == '.' || c == ':');
-            if path_like(t) {
-                self.paths.entry(t.to_string()).or_insert(seq);
-            }
-        }
-    }
+    // P007 R1.1：删除 observe()——通用切词入库让 grep/find_files 输出中被「提及」的路径
+    // 充当 evidence，击穿「必须真实读过」门禁。paths 的唯一喂入口是 observe_exact（真实读到）。
 
     pub fn cite_seq(&self, path: &str) -> Option<u64> {
         self.paths.get(path).copied()

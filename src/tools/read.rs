@@ -146,10 +146,34 @@ impl Tool for ReadTool {
     }
 }
 
+/// P007 R1.2：判别 read 输出是否真实交付了文件行内容。
+/// 二进制不倾倒 / 空文件 / offset 越界三种诚实声明返回 Ok 但未读出任何行——
+/// 这些路径不得进入证据库（「必须真实读过」门禁，R1.2）。判别特征与上方
+/// 成功分支的输出头（`· 共 N 行 · 显示 x-y 行`）同文件维护，防漂移。
+pub fn delivered_lines(output: &str) -> bool {
+    output.contains("· 共 ") && output.contains("行 · 显示 ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn delivered_lines_discriminates_honest_empty_reads() {
+        // P007 R1.2 回归：三种诚实声明（二进制/空文件/越界）均未读出行内容，
+        // 不得入证据库；只有成功分支的头格式判真
+        assert!(!delivered_lines(
+            "[read] a.bin：二进制文件（123 bytes），不倾倒内容。可用工具查看其结构，而非读取原文。"
+        ));
+        assert!(!delivered_lines("[read] empty.md：空文件（0 行）。"));
+        assert!(!delivered_lines(
+            "[read] big.rs：offset 99 超出范围，文件共 5 行。"
+        ));
+        assert!(delivered_lines(
+            "[read] big.rs · 共 500 行 · 显示 2-4 行\n2:abc|line 2\n"
+        ));
+    }
 
     fn tool_for(dir: &Path) -> ReadTool {
         ReadTool::new(Arc::new(Fence::new(dir).unwrap()))

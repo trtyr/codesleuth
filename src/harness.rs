@@ -109,7 +109,8 @@ impl Harness {
         let mut no_progress: u32 = 0;
         let mut zero_gain_streak: u32 = 0;
         let mut prose_streak: u32 = 0;
-        let mut contract_repaired: bool = false; // D021：输出契约修复轮预算（仅一轮）
+        let mut contract_repaired_prose: bool = false; // D021/R1.4：契约修复轮预算按通道独立
+        let mut contract_repaired_submit: bool = false;
         let mut turns: u32 = 0;
         let mut executed: u32 = 0;
         let mut total_tokens: u64 = 0;
@@ -210,16 +211,32 @@ impl Harness {
                     continue;
                 }
                 let answer = strip_task_echo(task, &resp.text.unwrap_or_default());
+                // R1.3：降级路径同样拒空 answer（submit 路径 build_report 有此校验，这里补齐）——
+                // 走与契约转向同构的补答轮，预算耗尽后 CS2005
+                if answer.trim().is_empty() {
+                    if contract_repaired_prose {
+                        return Err(contract_error(&["answer 为空".to_string()]));
+                    }
+                    contract_repaired_prose = true;
+                    self.audit.record(
+                        "contract_steer",
+                        &serde_json::json!({"missing": ["answer 为空"], "degraded_path": true, "channel": "prose"}),
+                    )?;
+                    messages.push(ChatMessage::User {
+                        content: "回答为空。请给出实质结论，并调用 submit_report 提交结构化报告（answer/findings/dead_ends/confidence）。".into(),
+                    });
+                    continue;
+                }
                 // D021：prose 降级收敛同样过输出契约（缺失 → 补一轮转向 → 仍缺失判 CS2005）
                 let missing = missing_markers(&self.required, &answer);
                 if !missing.is_empty() {
-                    if contract_repaired {
+                    if contract_repaired_prose {
                         return Err(contract_error(&missing));
                     }
-                    contract_repaired = true;
+                    contract_repaired_prose = true;
                     self.audit.record(
                         "contract_steer",
-                        &serde_json::json!({"missing": missing, "degraded_path": true}),
+                        &serde_json::json!({"missing": missing, "degraded_path": true, "channel": "prose"}),
                     )?;
                     messages.push(ChatMessage::Assistant {
                         content: Some(answer.clone()),
@@ -285,13 +302,13 @@ impl Harness {
                             // D021：输出契约校验——缺失则补一轮修复引导，仍缺失判 CS2005
                             let missing = missing_markers(&self.required, &report.answer);
                             if !missing.is_empty() {
-                                if contract_repaired {
+                                if contract_repaired_submit {
                                     return Err(contract_error(&missing));
                                 }
-                                contract_repaired = true;
+                                contract_repaired_submit = true;
                                 self.audit.record(
                                     "contract_steer",
-                                    &serde_json::json!({"missing": missing}),
+                                    &serde_json::json!({"missing": missing, "channel": "submit"}),
                                 )?;
                                 self.reject_call(
                                     call,
@@ -430,11 +447,11 @@ impl Harness {
                             "tool_result",
                             &serde_json::json!({"tool_call_seq": seq, "name": call.name, "output": output}),
                         )?;
-                        self.evidence
-                            .lock()
-                            .unwrap_or_else(|p| p.into_inner())
-                            .observe(&output, seq);
-                        if let Some(p) = &read_exact_path {
+                        // P007 R1.1：删除通用 observe——工具输出中被「提及」的路径不再入库；
+                        // evidence 唯一喂入口 = read 真实读到内容（R1.2 delivered_lines 门）
+                        if let Some(p) = &read_exact_path
+                            && crate::tools::read::delivered_lines(&output)
+                        {
                             self.evidence
                                 .lock()
                                 .unwrap_or_else(|p| p.into_inner())
@@ -974,6 +991,62 @@ mod tests {
         }
     }
 
+    /// P007 R1.3：text=None 的 prose 轮不产出空 answer 报告——补答轮后仍空判 CS2005
+    #[tokio::test]
+    async fn prose_empty_answer_is_steered_then_rejected() {
+        fn resp_none() -> ChatResponse {
+            ChatResponse {
+                text: None,
+                tool_calls: vec![],
+                usage: Usage::default(),
+            }
+        }
+        let script = vec![resp_none(), resp_none(), resp_none()];
+        let (res, seen, _dir) = run_with(script, ToolRegistry::new()).await;
+        let err = res.expect_err("空 answer 不得以 Ok 落盘");
+        assert_eq!(err.code, OUTPUT_CONTRACT);
+        // 第一轮空 prose 应触发补答转向（R1.3 新分支）
+        let requests = seen.lock().unwrap();
+        assert!(requests.iter().any(|r| r.messages.iter().any(|m| matches!(
+            m,
+            ChatMessage::User { content } if content.contains("回答为空")
+        ))));
+    }
+
+    /// P007 R1.4：prose 通道烧掉修复预算后，submit 通道首次违约仍有一轮修复
+    #[tokio::test]
+    async fn contract_budget_is_per_channel() {
+        let marker = "<!--R-->".to_string();
+        let script = vec![
+            resp_text("prose 正文没有标记"), // prose 第 1 轮：引导 submit（不烧契约预算）
+            resp_text("prose 还是没有标记"), // prose 第 2 轮：缺标记 → 烧 prose 预算 + 契约转向
+            resp_call(
+                "s1",
+                SUBMIT_TOOL,
+                r#"{"answer":"submit 没标记","findings":[],"confidence":"high"}"#,
+            ), // submit 首次违约 → 必须转向而非判死（独立预算）
+            resp_call(
+                "s2",
+                SUBMIT_TOOL,
+                r#"{"answer":"submit 正文 <!--R--> 完","findings":[],"confidence":"high"}"#,
+            ),
+        ];
+        let (res, seen, _dir) = run_with_markers(script, ToolRegistry::new(), vec![marker]).await;
+        let out = res.expect("submit 通道应有自己的修复轮并收敛");
+        assert!(out.report.answer.contains("<!--R-->"));
+        // prose 违约转向与 submit 违约转向都发生过
+        let requests = seen.lock().unwrap();
+        let steers = requests
+            .iter()
+            .filter(|r| {
+                r.messages.iter().any(|m| {
+                    matches!(m, ChatMessage::User { content } if content.contains("输出契约校验未过"))
+                })
+            })
+            .count();
+        assert!(steers >= 2, "两通道各至少一次违约转向，实际 {steers}");
+    }
+
     fn resp_call(id: &str, name: &str, args: &str) -> ChatResponse {
         ChatResponse {
             text: None,
@@ -1261,18 +1334,23 @@ mod tests {
 
     #[tokio::test]
     async fn submit_report_converges_with_validated_evidence() {
-        let calls = Arc::new(Mutex::new(0u32));
+        // P007 R1.1 后：evidence 只认真实 read 过的路径——先 read 再 cite
+        let src = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(src.path().join("src")).unwrap();
+        std::fs::write(src.path().join("src/retry.rs"), "fn retry() {}\n").unwrap();
         let mut reg = ToolRegistry::new();
-        reg.register(Box::new(Echo {
-            calls: calls.clone(),
-            output: "found in src/retry.rs".into(),
-        }));
+        reg.register(Box::new(crate::tools::read::ReadTool::new(
+            std::sync::Arc::new(crate::fence::Fence::new(src.path()).unwrap()),
+        )));
         let submit_ok = resp_call(
             "s1",
             SUBMIT_TOOL,
-            r#"{"answer":"重试在 retry.rs","findings":[{"statement":"核心函数","evidence":[{"file":"src/retry.rs","lines":"7-22"}]}],"dead_ends":[],"confidence":"high"}"#,
+            r#"{"answer":"重试在 retry.rs","findings":[{"statement":"核心函数","evidence":[{"file":"src/retry.rs","lines":"1"}]}],"dead_ends":[],"confidence":"high"}"#,
         );
-        let script = vec![resp_call("1", "echo", "{\"q\":1}"), submit_ok];
+        let script = vec![
+            resp_call("1", "read", r#"{"path":"src/retry.rs"}"#),
+            submit_ok,
+        ];
         let (res, _seen, dir) = run_with(script, reg).await;
         let out = res.unwrap();
         assert!(!out.report.degraded);
@@ -1289,18 +1367,22 @@ mod tests {
             .collect();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0]["kind"], "tool_call");
-        assert_eq!(hits[0]["name"], "echo");
+        assert_eq!(hits[0]["name"], "read");
         drop(dir);
     }
 
     #[tokio::test]
     async fn submit_with_uncited_evidence_is_rejected_then_recovers() {
-        let calls = Arc::new(Mutex::new(0u32));
+        // P007 R1.1 回归：从未 read 过的路径（哪怕在工具输出中被提及）被拒；
+        // read 过的路径可引用并收敛。bad 引用 nope/none.rs（未读过）→ 打回；
+        // good 引用 read 过的 src/retry.rs → 放行。
+        let src = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(src.path().join("src")).unwrap();
+        std::fs::write(src.path().join("src/retry.rs"), "fn retry() {}\n").unwrap();
         let mut reg = ToolRegistry::new();
-        reg.register(Box::new(Echo {
-            calls: calls.clone(),
-            output: "found in src/retry.rs".into(),
-        }));
+        reg.register(Box::new(crate::tools::read::ReadTool::new(
+            std::sync::Arc::new(crate::fence::Fence::new(src.path()).unwrap()),
+        )));
         let bad = resp_call(
             "b1",
             SUBMIT_TOOL,
@@ -1309,9 +1391,13 @@ mod tests {
         let good = resp_call(
             "b2",
             SUBMIT_TOOL,
-            r#"{"answer":"ok","findings":[{"statement":"s","evidence":[{"file":"src/retry.rs","lines":"7"}]}],"confidence":"high"}"#,
+            r#"{"answer":"ok","findings":[{"statement":"s","evidence":[{"file":"src/retry.rs","lines":"1"}]}],"confidence":"high"}"#,
         );
-        let script = vec![resp_call("1", "echo", "{\"q\":1}"), bad, good];
+        let script = vec![
+            resp_call("1", "read", r#"{"path":"src/retry.rs"}"#),
+            bad,
+            good,
+        ];
         let (res, _seen, _dir) = run_with(script, reg).await;
         let out = res.unwrap();
         assert!(!out.report.degraded);
@@ -1434,10 +1520,14 @@ mod tests {
     }
 
     #[test]
-    fn evidence_store_observes_citations() {
+    fn evidence_citation_rejected_unless_exact_read() {
+        // P007 R1.1 回归：grep/工具输出中被「提及」的路径不再是证据，
+        // cite_seq 只认 observe_exact（真实读到内容）的精确入库
         let mut store = EvidenceStore::default();
-        store.observe("输出提到 src/main.rs", 3);
+        store.observe_exact("src/main.rs", 3);
         assert_eq!(store.cite_seq("src/main.rs"), Some(3));
+        // 只在别的工具输出里出现过、从未 read 过的路径：拒绝
+        assert_eq!(store.cite_seq("src/never_read.rs"), None);
     }
 
     #[test]
@@ -1452,12 +1542,12 @@ mod tests {
             "observe_exact 后应逐字命中"
         );
 
-        // 切词器会把该路径劈成碎片，精确记录不受影响（这正是 read 精确存证存在的原因）
-        store.observe("read 输出提到 00 日记/2026 年 7 月 7 日.md 的内容", 9);
+        // 切词器会把该路径劈成碎片；P007 R1.1 后通用切词入库已删除，
+        // 精确记录不受任何其他输出影响
         assert_eq!(
             store.cite_seq(spaced),
             Some(7),
-            "碎片化观察不应破坏精确记录"
+            "其他工具输出提及同路径不应影响精确记录"
         );
     }
 }

@@ -1,0 +1,14 @@
+# 宏观 · coupling
+
+> 置信度 medium · 8 条发现 · 209640 tokens
+
+总评定级：中等（局部纠缠，主干健康）。仓库整体分层意图清晰（tools / vector / 安全防护 / 编排各成模块，错误码与退出码集中单一事实源 errors.rs），模块内多为功能内聚。但存在四类系统性耦合病灶：①cli.rs 是发散式修改重灾区——run_task_inner 一个函数 288 行横跨配置、LLM 装配、工具注册、向量层、零写入自证、报告持久化六个互不相关的变更原因；②「降级留痕」模式（tracing::warn + audit.record("degraded")）在 cli.rs/setup_vector_layer 内复制粘贴 5+ 处，改留痕格式即散弹式修改；③bootlock 的「acquire 释放锁后才返回 Lost/OpponentFinished」时序契约把「产物已就绪」的验证责任推给各调用方，且 graph 引导与向量构建共用同一把 boot.lock，形成跨域公共耦合——两个消费方各自复制了一份锁编排（run_index_vector 与 setup_vector_layer），微观层的复制粘贴改漏缺陷正是这种结构性重复的产物；④harness 主循环用字符串硬编码内建工具名（"read"/"submit_report"/"recall"）并特判 read 的参数语义，是对工具层内部的字符串级内容耦合。解耦最优先：把 run_task_inner 按变更原因拆成装配阶段、把「降级留痕」收敛为单一 helper、把 bootlock 三态消费收敛为一个「锁内构建+产物校验」门面。
+
+1. run_task_inner 是发散式修改重灾区：单个函数约 288 行，串行承担参数校验、配置加载、Provider 构造、Fence/工具注册、writeguard 考前快照、codegraph 引导、向量层装配、repo-map 注入、Harness 构建、考后 diff、报告落盘、stdout 输出等至少六个互不相关的变更原因——任何一项需求变更（如新增输出格式、改快照策略）都要动这同一函数，典型内聚缺失。（src/cli.rs:228-516）
+2. 「非致命降级 = warn 日志 + audit.record(degraded)」同一模式在 cli.rs 复制 5+ 处（codegraph、vector_layer、repo_map、vector_build、recall），微观底稿还发现其中一处漏留痕——改一处忘其余的散弹式修改病灶已被实证，应收敛为单一 helper（如 audit.degraded(component, &e)）。（src/cli.rs:303-311、src/cli.rs:359-366、src/cli.rs:636-642）
+3. bootlock 时序契约靠调用方自觉：acquire_guard 在返回 OpponentFinished 前已放锁（Won 分支 drop(vguard) 后、OpponentFinished 分支从未持锁即结束），「对手刚完成=产物就绪」的前置条件没有任何类型或锁机制保障，全部押在每个调用方自行回查产物；且向量构建与 codegraph 引导（graph.rs）共用同一把 .codesleuth/boot.lock，是跨两个特性域的公共耦合点——微观层的两处复制粘贴改漏（run_index_vector 有产物回查、setup_vector_layer 没有）正是该契约分散的必然产物。（src/cli.rs:616-650、src/errors.rs:48-53）
+4. harness 对工具层存在字符串级内容耦合：主循环硬编码 "read"/"submit_report"/"recall" 工具名做特判分支（recall 走独立分支、read 在 execute 前摘取 path 参数存证），工具的注册名、参数语义与 harness 内建 schema（builtin_schemas）三处各自维护——新增一个需要审计特判的工具必须同时改 harness 主循环多处。（src/harness.rs:22-23、src/harness.rs:420-425）
+5. cli.rs 越过 vector 门面直接伸手到子模块内部：setup_vector_layer 与 repo-map 分支直接调用 vector::repomap::*、vector::chunk::relations_for_symbol、vector::store::fingerprint/index_path/project_index_dir 等子模块符号（尽管 mod.rs 提供了 pub use 门面）——vector 内部布局（如把 repomap 挪出 vector/）会波及 cli 多处，属贪心越级引用。（src/cli.rs:676-703、src/cli.rs:374-380、src/vector/mod.rs:8-21）
+6. 正面样本：错误码→退出码映射、分层配置优先级、日志双轨各自集中在单一文件（errors.rs exit_code 段位 match、config.rs 模块头声明优先级并对应 merge 链、lib.rs init_tracing），数据耦合为主（CsError 携带 code/message/hint 传值），无全局可变单例——主干健康的确证。（src/lib.rs:27-66、src/errors.rs:8-23、src/config.rs:1-7）
+7. 代码卫生小病灶：OpenAiProvider::new 的重试次数以裸魔法数 2 传入（对比 harness 的 MAX_NO_PROGRESS_STREAK=2 有名常量）；Harness::new 六个位置参数的构造签名，新增装配项（如 required markers）只能继续膨胀参数表或加 builder——cli.rs 装配段已出现连续三次 with_xxx 链式补丁。（src/cli.rs:271-276、src/harness.rs:18-21）
+8. 报告交付面三重职责混在 cli 尾段：md/json 双写 ~/.codesleuth/reports、--out 按格式分流写、stdout 按 OutputFormat 三选一打印，三个交付通道的格式语义（Report/Raw/Json 的 body 选择）内联重复出现两次（492-496 与 502-506），改交付格式需同步两处。（src/cli.rs:482-506）
