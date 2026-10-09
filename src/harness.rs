@@ -141,6 +141,17 @@ impl Harness {
                 } else {
                     messages = compacted; // no-op 原样（窗口尚无可驱逐内容）
                 }
+                // P007 R2.14：保留侧超大单条消息截断（确定性，零 LLM）——
+                // compact 无可驱遂段时单条超大消息每轮把超窗口请求发往 API 直至 400
+                let (truncated_msgs, truncated_count) =
+                    context::truncate_oversized_messages(messages, context::MAX_MSG_CHARS);
+                messages = truncated_msgs;
+                if truncated_count > 0 {
+                    self.audit.record(
+                        "context_truncate",
+                        &serde_json::json!({"count": truncated_count, "max_chars": context::MAX_MSG_CHARS}),
+                    )?;
+                }
             }
 
             let req = ChatRequest {
@@ -372,6 +383,14 @@ impl Harness {
                         if keys.iter().any(|k| seen_keys.insert(k.clone())) {
                             no_progress = 0;
                             zero_gain_streak = 0;
+                        } else {
+                            // P007 R2.1：零增益 recall 也计入熔断——否则坏模型循环递增窗口
+                            // （每次审计行 seq 前缀不同）可无限烧 token
+                            no_progress += 1;
+                            zero_gain_streak += 1;
+                            if let Some(fuse) = fuse_if_hit(no_progress, &self.audit)? {
+                                return Err(fuse);
+                            }
                         }
                     }
                     messages.push(msg);
@@ -1255,6 +1274,24 @@ mod tests {
         assert!(steering_in_4th, "第 4 次请求应包含转向指令");
     }
 
+    /// P007 R2.1 回归：零增益 recall 循环计入熔断（旧实现完全豁免，可无限烧 token）
+    #[tokio::test]
+    async fn recall_zero_gain_counts_toward_fuse() {
+        let script: Vec<_> = (0..6)
+            .map(|i| {
+                resp_call(
+                    &format!("r{i}"),
+                    "recall",
+                    &format!(r#"{{"from":{},"to":{}}}"#, i + 1, i + 1),
+                )
+            })
+            .chain(std::iter::once(resp_text("never")))
+            .collect();
+        let (res, _seen, _dir) = run_with(script, ToolRegistry::new()).await;
+        let err = res.unwrap_err();
+        assert_eq!(err.code, LLM_FUSE, "零增益 recall 循环必须触熔断");
+    }
+
     #[tokio::test]
     async fn fuse_after_five_no_progress_steps() {
         let script: Vec<_> = (0..5)
@@ -1453,7 +1490,12 @@ mod tests {
             }
             async fn execute(&self, args: Value) -> CsResult<String> {
                 let n = args.get("n").and_then(Value::as_u64).unwrap_or(1);
-                Ok(format!("unique output #{n}: {}", "y".repeat(2000)))
+                // R2.2 后增量记账只认新路径 token：带唯一路径使每轮判有增益，
+                // 消息照常累积（压缩语义不变，不误触熔断）
+                Ok(format!(
+                    "[read] src/mod{n}.rs · 共 100 行 · 显示 1-100 行\n{}",
+                    "y".repeat(2000)
+                ))
             }
         }
         let mut reg2 = ToolRegistry::new();

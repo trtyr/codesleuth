@@ -56,24 +56,23 @@ pub async fn build_vector_index(
         .cloned()
         .collect();
 
-    let mut pending: Vec<Chunk> = Vec::new();
+    let mut inputs: Vec<(Chunk, String)> = Vec::with_capacity(chunks.len());
     let mut reused = 0usize;
     for c in &chunks {
         let key = chunk_key(c);
-        if !stale_index && existing.get(&key) == Some(&c.text_hash) {
+        // P007 R2.12：复用判定改为对「组装后的嵌入输入」做 hash——旧实现在 raw text 上
+        // 做 sha256，Composite 模式下子窗块的 text 不含 header（签名/docstring），
+        // 仅改签名时 text_hash 不变 → 旧向量被错误复用（增量复用投毒）。
+        // Raw 模式 compose=text，语义不变。
+        let input = compose_input(c, mode);
+        let hash = crate::vector::chunk::sha256_hex(&input);
+        if !stale_index && existing.get(&key) == Some(&hash) {
             reused += 1;
             continue;
         }
-        pending.push(c.clone());
-    }
-    tracing::info!("待嵌入 {} 块（复用 {}）", pending.len(), reused);
-
-    // 组装 + 嵌入（网络调用在事务外：失败时索引零改动）
-    let mut inputs: Vec<(Chunk, String)> = Vec::with_capacity(pending.len());
-    for c in &pending {
-        let input = compose_input(c, mode);
         inputs.push((c.clone(), input));
     }
+    tracing::info!("待嵌入 {} 块（复用 {}）", inputs.len(), reused);
     let texts: Vec<String> = inputs.iter().map(|(_, i)| i.clone()).collect();
     let vectors = embed.embed(&texts).await?;
     let updates: Vec<(Chunk, Vec<f32>)> = inputs

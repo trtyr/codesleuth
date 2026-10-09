@@ -27,6 +27,9 @@ pub struct RecallEngine {
     rows: Vec<(Chunk, Vec<f32>)>,
     alive: HashSet<usize>,
     hnsw: Option<Hnsw<'static, f32, DistCosine>>,
+    /// P007 R2.13：meta（model/dim）与当前嵌入客户端是否一致——
+    /// 不一致时暴力路径 zip 截断余弦会产生无意义相似度，召回必须拒绝而非硬算。
+    meta_ok: bool,
 }
 
 impl RecallEngine {
@@ -45,6 +48,7 @@ impl RecallEngine {
             rows,
             alive,
             hnsw: None,
+            meta_ok: model_ok && dim_ok,
         };
         if engine.rows.len() >= MIN_HNSW_SIZE && model_ok && dim_ok {
             engine.build_hnsw();
@@ -126,6 +130,15 @@ impl RecallEngine {
 
     /// 文本查询（异步）：指令前缀嵌入 → 三段式召回。查询侧走 Qwen3 指令感知前缀。
     pub async fn recall(&self, query: &str, k: usize) -> CsResult<Vec<(Chunk, f32)>> {
+        // P007 R2.13：meta 不一致时拒绝召回——跨模型/跨维度 zip 截断余弦是无意义分数，
+        // 误导 agent；诚实报错并指向重建
+        if !self.meta_ok {
+            return Err(CsError::new(
+                INDEX_NOT_AVAILABLE,
+                "向量索引 meta 与当前嵌入模型/维度不一致，召回结果无语义",
+            )
+            .with_hint("重建索引后重试：codesleuth index --vector（或 run --fresh-index）"));
+        }
         let qv = self.embed.embed(&[instruct_query(query)]).await?;
         let qv = qv
             .into_iter()
@@ -277,14 +290,17 @@ mod tests {
     }
 
     #[test]
-    fn meta_mismatch_skips_hnsw_but_brute_still_works() {
+    fn meta_mismatch_refuses_recall() {
+        // P007 R2.13：meta 不一致时召回拒绝（旧行为：降级暴力硬算无意义相似度）
         let (_dir, store, _) = store_with(1200, 8);
         store.set_meta("model", "other-model").unwrap();
         let embed = EmbedClient::new("https://x.example", "k", "test-model", 8);
         let engine = RecallEngine::open(store, embed).unwrap();
         assert!(engine.hnsw.is_none(), "模型不一致不得建图");
-        let qv = hot_query(8, 5);
-        let hits = engine.recall_by_vector(&qv, 3);
-        assert!(!hits.is_empty(), "模型不一致降级暴力，检索仍须可用");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let err = rt
+            .block_on(engine.recall("query", 3))
+            .expect_err("meta 不一致必须拒绝召回");
+        assert_eq!(err.code, INDEX_NOT_AVAILABLE);
     }
 }

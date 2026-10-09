@@ -150,10 +150,15 @@ impl Tool for GrepTool {
             .ok_or_else(|| CsError::new(USER_INPUT, "grep 缺少 pattern 参数"))?
             .to_string();
         let mode_str = args.get("mode").and_then(Value::as_str).unwrap_or("plain");
+        // P007 R2.11：schema 承诺 enum，非法值不再静默降级 plain（错语义搜索零反馈）
         let mode = match mode_str {
+            "plain" => GrepMode::PlainText,
             "regex" => GrepMode::Regex,
             "fuzzy" => GrepMode::Fuzzy,
-            _ => GrepMode::PlainText,
+            other => {
+                return Err(CsError::new(USER_INPUT, format!("grep mode 非法: {other}"))
+                    .with_hint("mode 只接受 plain | regex | fuzzy"));
+            }
         };
         let limit = args
             .get("limit")

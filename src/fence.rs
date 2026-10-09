@@ -72,7 +72,12 @@ fn normalize(p: &Path) -> PathBuf {
 
 /// 围栏前缀判定（P005 R6.1）：Windows 文件系统大小写不敏感，逐组件忽略 ASCII 大小写比较，
 /// 其余平台严格比较——避免合法路径在 Windows 被大小写差异误杀。
+/// P007 R2.9：先比组件数再逐组件比——纯 zip 在 p 是 root 的严格祖先时提前耗尽空真放行
+/// （resolve("..") 击穿围栏；normalize 折叠 .. 后组件数变少），必须拒绝。
 fn starts_with_root(p: &Path, root: &Path) -> bool {
+    if p.components().count() < root.components().count() {
+        return false;
+    }
     p.components().zip(root.components()).all(|(a, b)| {
         #[cfg(windows)]
         {
@@ -121,6 +126,19 @@ mod tests {
         let fence = Fence::new(dir.path()).unwrap();
         let err = fence.resolve("/etc/hosts").unwrap_err();
         assert_eq!(err.code, FENCE_DENIED);
+    }
+
+    #[test]
+    fn parent_dir_escape_is_denied() {
+        // P007 R2.9 回归：normalize 折叠 .. 后组件数少于 root，旧 zip 判定空真放行，
+        // 两层检查均返回 Ok(围栏外目录)；现在必须 FENCE_DENIED
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        let fence = Fence::new(dir.path()).unwrap();
+        for p in ["..", "../..", "src/../../outside.txt"] {
+            let err = fence.resolve(p).unwrap_err();
+            assert_eq!(err.code, FENCE_DENIED, "path={p}");
+        }
     }
 
     #[test]

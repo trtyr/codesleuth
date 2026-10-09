@@ -1,10 +1,12 @@
 //! 证据库 + 信息增量键（P004 T6.2 从 harness.rs 角色分离迁出）。
 //!
 //! harness 主循环只管编排；「什么算证据、怎么记账」的语义集中在本模块。
-use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 
-/// 信息增量键：路径形 token + 内容指纹（solution-map §3 增量记账）。
+/// 信息增量键：路径形 token（solution-map §3 增量记账）。
+/// P007 R2.2：移除整段输出的 sha256 内容指纹——它让任何「内容略有不同」的
+/// 无效输出（如微调参数后的「0 命中」）都判有增益，架空中零增量熔断；
+/// 增量记账只认新路径 token。
 pub fn info_keys(output: &str) -> Vec<String> {
     let mut keys: HashSet<String> = HashSet::new();
     for tok in output.split(|c: char| c.is_whitespace() || "[]()<>\"'`,;".contains(c)) {
@@ -13,9 +15,6 @@ pub fn info_keys(output: &str) -> Vec<String> {
             keys.insert(t.to_string());
         }
     }
-    let digest = Sha256::digest(output.as_bytes());
-    let hex: String = digest[..8].iter().map(|b| format!("{b:02x}")).collect();
-    keys.insert(hex);
     keys.into_iter().collect()
 }
 

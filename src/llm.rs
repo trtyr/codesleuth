@@ -332,7 +332,7 @@ fn classify_llm_error(status: Option<u16>, body: &str) -> (CsCode, bool) {
 }
 
 /// 字符边界安全截断：切点落在 UTF-8 多字节字符中缝时回退到上一个边界，绝不 panic。
-fn safe_prefix(s: &str, max_bytes: usize) -> &str {
+pub(crate) fn safe_prefix(s: &str, max_bytes: usize) -> &str {
     if s.len() <= max_bytes {
         return s;
     }

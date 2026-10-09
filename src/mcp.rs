@@ -15,6 +15,9 @@ use tokio::sync::Mutex;
 
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(90);
 
+/// P007 R2.10：MCP 单行响应长度上限（JSON-RPC 响应不可能合理超过此值）。
+const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
+
 #[derive(Debug)]
 pub struct McpClient {
     child: Mutex<tokio::process::Child>,
@@ -173,6 +176,17 @@ impl McpClient {
                     "MCP server 提前关闭了连接",
                 ));
             }
+            // P007 R2.10：单行长度上限——无换行的超长输出会无限累积内存直到超时；
+            // 超限即报错（server 输出格式失控属于结构故障，不该靠 90s 超时兑底）
+            if buf.len() > MAX_LINE_BYTES {
+                return Err(CsError::new(
+                    INDEX_NOT_AVAILABLE,
+                    format!(
+                        "MCP 单行响应超过 {}MB 上限，server 输出异常",
+                        MAX_LINE_BYTES / 1024 / 1024
+                    ),
+                ));
+            }
             let Ok(v) = serde_json::from_str::<Value>(buf.trim()) else {
                 continue; // 非法行跳过
             };
@@ -197,10 +211,14 @@ impl McpClient {
 
 impl Drop for McpClient {
     fn drop(&mut self) {
-        // 生命周期回收（D011）：会话结束即回收 server 进程
-        if let Ok(mut child) = self.child.try_lock() {
-            let _ = child.start_kill();
-        }
+        // 生命周期回收（D011）：会话结束即回收 server 进程。
+        // P007 R2.15：try_lock 失败静默跳过会泄漏孤儿进程且无任何痕迹——
+        // 改 blocking_lock（Drop 同步上下文，持锁方在 await 点挂起时最多等
+        // 到其完成；正常路径锁空闲无开销），泄漏窗口消除。
+        // 注：blocking_lock 在异步 runtime 线程上 panic 风险仅在锁被永久持有时，
+        // 当前 child 锁只在 Drop 内触碰，无此场景。
+        let mut child = self.child.blocking_lock();
+        let _ = child.start_kill();
     }
 }
 

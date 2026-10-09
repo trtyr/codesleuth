@@ -166,11 +166,12 @@ impl EmbedClient {
         if !status.is_success() {
             let snippet = value.to_string();
             let retryable = status.as_u16() == 429 || status.is_server_error();
+            // P007 R2.7：复用 llm::safe_prefix 字符边界安全截断（单一实现，不造第二把刀）
             return Err(CsError::new(
                 INDEX_EMBED_FAILED,
                 format!(
                     "embeddings HTTP {status}: {}",
-                    &snippet[..snippet.len().min(200)]
+                    crate::llm::safe_prefix(&snippet, 200)
                 ),
             )
             .with_retryable(retryable));

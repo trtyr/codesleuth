@@ -81,6 +81,48 @@ pub fn compact(
     (out, Compaction { evicted_count })
 }
 
+/// P007 R2.14：单条消息字符数上限（≈50k token）。超过则截断 + 诚实标记——
+/// 单条超大消息（大 read / 无上限 recall）落在保留侧时 compact 无可驱遂段，
+/// 每轮把超窗口请求发往 API 直至 400 硬终止。
+pub const MAX_MSG_CHARS: usize = 200_000;
+
+/// 保留侧超大单条消息截断（确定性，零 LLM，D008）：字符边界安全切割，
+/// 带诚实标记。返回（新消息列表，截断条数）。
+pub fn truncate_oversized_messages(
+    messages: Vec<ChatMessage>,
+    max_chars: usize,
+) -> (Vec<ChatMessage>, usize) {
+    let mut truncated = 0usize;
+    let out = messages
+        .into_iter()
+        .map(|m| match m {
+            ChatMessage::Tool { call_id, content } if content.len() > max_chars => {
+                truncated += 1;
+                ChatMessage::Tool {
+                    call_id,
+                    content: truncate_with_note(&content, max_chars),
+                }
+            }
+            ChatMessage::User { content } if content.len() > max_chars => {
+                truncated += 1;
+                ChatMessage::User {
+                    content: truncate_with_note(&content, max_chars),
+                }
+            }
+            other => other,
+        })
+        .collect();
+    (out, truncated)
+}
+
+fn truncate_with_note(content: &str, max_chars: usize) -> String {
+    let kept = crate::llm::safe_prefix(content, max_chars);
+    format!(
+        "{kept}\n[截断] 原文共 {} 字符，仅保留前 {max_chars}；完整原文用 recall {{\"from\": .., \"to\": ..}} 钻取审计原文。",
+        content.len()
+    )
+}
+
 /// recall 结果的消息化包装（D008 钻取：原文逐行 seq 标注，不重不漏）。
 pub fn recall_message(lines: &[(u64, serde_json::Value)]) -> ChatMessage {
     let mut body = String::from("[recall] 审计原文（按 seq 升序，不重不漏）：\n");
@@ -192,6 +234,34 @@ mod tests {
             panic!("保留区不得以孤儿 tool 消息开头");
         }
         assert!(info.evicted_count > 0);
+    }
+
+    #[test]
+    fn oversized_retained_message_is_truncated_with_honest_note() {
+        // P007 R2.14 回归：保留侧超大单条消息被确定性截断 + 诚实标记，不再每轮撞 400
+        let big = "中".repeat(300_000); // 多字节内容，验证字符边界安全切割
+        let msgs = vec![
+            user("SYSTEM"),
+            user("TASK"),
+            ChatMessage::Tool {
+                call_id: "c1".into(),
+                content: big,
+            },
+        ];
+        let (out, n) = truncate_oversized_messages(msgs, MAX_MSG_CHARS);
+        assert_eq!(n, 1);
+        match &out[2] {
+            ChatMessage::Tool { content, .. } => {
+                assert!(content.len() < 300_000);
+                assert!(content.contains("[截断]"));
+                assert!(content.contains("recall"));
+            }
+            other => panic!("expect tool, got {other:?}"),
+        }
+        // 小消息不截断
+        let (out2, n2) = truncate_oversized_messages(vec![user("small")], MAX_MSG_CHARS);
+        assert_eq!(n2, 0);
+        assert_eq!(out2, vec![user("small")]);
     }
 
     #[test]

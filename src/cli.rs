@@ -178,40 +178,51 @@ impl Cli {
             .map_err(|e| CsError::new(INTERNAL, format!("tokio runtime 启动失败: {e}")))?;
         // D014：手动预建索引与 run 时引导共用同一把引导锁；
         // D020：等待后获得 = 对手刚完成构建，若产物已就绪则直接复用返回。
+        // P007 R2.6：产物缺失不再无锁裸建（重开竞态窗口）——重新竞争引导锁，
+        // 超限后诚实判负（与 graph.rs R1.6 同语义）。
         let index_dir = vector::store::project_index_dir(&repo_abs);
-        match crate::bootlock::acquire_guard(
-            &repo_abs,
-            crate::bootlock::DEFAULT_TIMEOUT,
-            "向量索引构建",
-        )? {
-            crate::bootlock::BootLockOutcome::OpponentFinished
-                if vector::store::index_path(
-                    &index_dir,
-                    &vector::store::fingerprint(&repo_abs),
-                )
-                .exists() =>
-            {
-                eprintln!("# 向量索引: 另一进程刚完成构建，复用其产物（D020）");
-                return Ok(());
+        let index_file =
+            vector::store::index_path(&index_dir, &vector::store::fingerprint(&repo_abs));
+        let mut lost_retries: u32 = 0;
+        let _guard = loop {
+            let outcome = crate::bootlock::acquire_guard(
+                &repo_abs,
+                crate::bootlock::DEFAULT_TIMEOUT,
+                "向量索引构建",
+            )?;
+            match outcome {
+                crate::bootlock::BootLockOutcome::OpponentFinished if index_file.exists() => {
+                    eprintln!("# 向量索引: 另一进程刚完成构建，复用其产物（D020）");
+                    break None;
+                }
+                crate::bootlock::BootLockOutcome::OpponentFinished => {
+                    lost_retries += 1;
+                    if lost_retries > 3 {
+                        return Err(crate::errors::CsError::new(
+                            crate::errors::INDEX_LOCKED,
+                            "对手进程释放引导锁但未留下索引产物（疑似多次中途崩溃）",
+                        )
+                        .with_hint("检查磁盘与并发进程后重试 index --vector"));
+                    }
+                    tracing::warn!(
+                        component = "vector_build",
+                        "对手释放引导锁但产物缺失，重新竞争引导锁（{lost_retries}/3）"
+                    );
+                }
+                crate::bootlock::BootLockOutcome::Won(g) => break Some(g),
             }
-            outcome => {
-                let _guard = match outcome {
-                    crate::bootlock::BootLockOutcome::Won(g) => Some(g),
-                    _ => None, // 产物缺失的罕见路径：无锁增量补建（增量事务保护仍有效）
-                };
-                let report = rt.block_on(vector::build_vector_index(
-                    &repo_abs, &index_dir, embed, mode,
-                ))?;
-                eprintln!(
-                    "# 向量索引: {} chunks（嵌入 {} 复用 {} 清理 {}）→ {}",
-                    report.chunks_total,
-                    report.embedded,
-                    report.reused,
-                    report.gc_removed,
-                    report.index_path.display()
-                );
-            }
-        }
+        };
+        let report = rt.block_on(vector::build_vector_index(
+            &repo_abs, &index_dir, embed, mode,
+        ))?;
+        eprintln!(
+            "# 向量索引: {} chunks（嵌入 {} 复用 {} 清理 {}）→ {}",
+            report.chunks_total,
+            report.embedded,
+            report.reused,
+            report.gc_removed,
+            report.index_path.display()
+        );
         Ok(())
     }
 
@@ -221,6 +232,78 @@ impl Cli {
             Err(e) => {
                 report_error(&e);
                 e.exit_code()
+            }
+        }
+    }
+
+    /// D1 零写入自证：考后 diff + 归因上报（审计 write_check 行 + stderr 摘要）。
+    /// P007 R2.3/R2.4：成功与失败会话共用本入口；考前快照失败时诚实落
+    /// available:false 留痕，不静默。防线自身的失败必须可见（P004 T3/T4）。
+    fn emit_write_check(
+        before: Option<&crate::writeguard::Manifest>,
+        repo_abs: &std::path::Path,
+        audit_path: &std::path::Path,
+    ) {
+        let Some(before) = before else {
+            if let Err(ae) = audit::append_line(
+                audit_path,
+                "write_check",
+                &serde_json::json!({"available": false, "reason": "guard_before_unavailable"}),
+            ) {
+                tracing::warn!("write_check 审计留痕失败: {ae}");
+            }
+            return;
+        };
+        match crate::writeguard::snapshot(repo_abs) {
+            Ok(after) => {
+                let changes = crate::writeguard::diff(before, &after);
+                let samples: Vec<String> = changes
+                    .iter()
+                    .take(5)
+                    .map(|c| format!("{:?} {}", c.kind, c.path))
+                    .collect();
+                if let Err(ae) = audit::append_line(
+                    audit_path,
+                    "write_check",
+                    &serde_json::json!({
+                        "files_snapshotted": before.len(),
+                        "unattributed_changes": changes.len(),
+                        "samples": samples,
+                    }),
+                ) {
+                    tracing::warn!("write_check 审计留痕失败: {ae}");
+                }
+                if changes.is_empty() {
+                    eprintln!("# 零写入自证：{} 文件快照，无变更 ✓", before.len());
+                } else {
+                    // 完整性违规 = 会话级严重事件（P004 T4）：ERROR 级必打
+                    tracing::error!(
+                        "零写入自证检测到 {} 处未归属变更（完整性违规）",
+                        changes.len()
+                    );
+                    eprintln!(
+                        "# 零写入自证：{} 文件快照，{} 处不可归因变更（并发/外部）：",
+                        before.len(),
+                        changes.len()
+                    );
+                    for c in changes.iter().take(5) {
+                        eprintln!("#   {:?} {}", c.kind, c.path);
+                    }
+                    if changes.len() > 5 {
+                        eprintln!("#   … 其余 {} 处见审计 write_check 行", changes.len() - 5);
+                    }
+                }
+            }
+            Err(e) => {
+                // write_check 留痕失败必须可见（P004 T3 吞错清零）
+                if let Err(ae) = audit::append_line(
+                    audit_path,
+                    "write_check",
+                    &serde_json::json!({ "available": false, "error": e.message }),
+                ) {
+                    tracing::warn!("write_check 审计留痕失败: {ae}");
+                }
+                tracing::warn!("零写入自证不可用: {e}");
             }
         }
     }
@@ -284,7 +367,19 @@ impl Cli {
         registry.register(Box::new(tools::fuzzy::GrepTool::new(engine)));
 
         // D1 零写入自证：考前快照（.codegraph 豁免，其余任何差异 = 不可归因变更）
-        let guard_before = crate::writeguard::snapshot(&repo_abs).ok();
+        // P007 R2.3：失败不再被 .ok() 静默吞掉——留 degraded 审计痕迹 + warn，
+        // 零写入自证防线不可无声消失
+        let guard_before = match crate::writeguard::snapshot(&repo_abs) {
+            Ok(s) => Some(s),
+            Err(e) => {
+                tracing::warn!(component = "writeguard", error = %e, "考前快照失败，零写入自证将不可用");
+                let _ = audit_log.record(
+                    "degraded",
+                    &serde_json::json!({"component": "writeguard", "stage": "before", "error": e.to_string()}),
+                );
+                None
+            }
+        };
 
         // 层进第 1 层（Phase 3 / D011）：结构图 = codegraph MCP，生命周期归 codesleuth
         let rt = tokio::runtime::Runtime::new()
@@ -390,6 +485,8 @@ impl Cli {
             }
         }
 
+        // 审计文件路径提前捕获（audit_log 即将 move 进 Harness；失败路径自证要用）
+        let audit_path = audit_log.path().to_path_buf();
         let agent = harness::Harness::new(
             provider,
             registry,
@@ -416,63 +513,18 @@ impl Cli {
                 a.with_required_line_markers(self.require_line.clone())
             }
         };
-        let outcome = rt.block_on(agent.run(&task))?;
+        // P007 R2.4：失败会话同样做考后自证——失败恰是最需要自证的会话
+        let run_result = rt.block_on(agent.run(&task));
         drop(agent);
         drop(cg); // MCP server 生命周期回收（D011）
-
-        // D1：考后 diff + 归因上报（审计 write_check 行 + stderr 摘要）
-        if let Some(before) = &guard_before {
-            match crate::writeguard::snapshot(&repo_abs) {
-                Ok(after) => {
-                    let changes = crate::writeguard::diff(before, &after);
-                    let samples: Vec<String> = changes
-                        .iter()
-                        .take(5)
-                        .map(|c| format!("{:?} {}", c.kind, c.path))
-                        .collect();
-                    audit::append_line(
-                        &outcome.audit_path,
-                        "write_check",
-                        &serde_json::json!({
-                            "files_snapshotted": before.len(),
-                            "unattributed_changes": changes.len(),
-                            "samples": samples,
-                        }),
-                    )?;
-                    if changes.is_empty() {
-                        eprintln!("# 零写入自证：{} 文件快照，无变更 ✓", before.len());
-                    } else {
-                        // 完整性违规 = 会话级严重事件（P004 T4）：ERROR 级必打
-                        tracing::error!(
-                            "零写入自证检测到 {} 处未归属变更（完整性违规）",
-                            changes.len()
-                        );
-                        eprintln!(
-                            "# 零写入自证：{} 文件快照，{} 处不可归因变更（并发/外部）：",
-                            before.len(),
-                            changes.len()
-                        );
-                        for c in changes.iter().take(5) {
-                            eprintln!("#   {:?} {}", c.kind, c.path);
-                        }
-                        if changes.len() > 5 {
-                            eprintln!("#   … 其余 {} 处见审计 write_check 行", changes.len() - 5);
-                        }
-                    }
-                }
-                Err(e) => {
-                    // write_check 留痕失败必须可见（P004 T3 吞错清零）
-                    if let Err(audit_err) = audit::append_line(
-                        &outcome.audit_path,
-                        "write_check",
-                        &serde_json::json!({ "available": false, "error": e.message }),
-                    ) {
-                        tracing::warn!("write_check 审计留痕失败: {audit_err}");
-                    }
-                    tracing::warn!("零写入自证不可用: {e}");
-                }
+        let outcome = match run_result {
+            Ok(o) => o,
+            Err(e) => {
+                Self::emit_write_check(guard_before.as_ref(), &repo_abs, &audit_path);
+                return Err(e);
             }
-        }
+        };
+        Self::emit_write_check(guard_before.as_ref(), &repo_abs, &outcome.audit_path);
 
         let human = outcome.answer.clone();
         let report_json = serde_json::to_string_pretty(&outcome.report)
@@ -615,40 +667,65 @@ fn setup_vector_layer(
     );
     // D014：向量构建与 graph 引导共用仓库级引导锁，进程间串行化；
     // D020：等待后获得 = 对手刚完成构建，产物已就绪，跳过构建直接开库。
+    // P007 R2.5：Lost≠产物就绪——对手可能中途崩溃留下缺失/残缺产物；
+    // 产物缺失时重新竞争引导锁（上限 3 次），超限弹性降级（无召回层继续）。
     let index_dir = vector::store::project_index_dir(ctx.repo_abs);
-    match crate::bootlock::acquire_guard(
-        ctx.repo_abs,
-        crate::bootlock::DEFAULT_TIMEOUT,
-        "向量索引构建",
-    )? {
-        crate::bootlock::BootLockOutcome::Won(vguard) => {
-            // 索引补建失败不致命（弹性降级，E3-R1 engram CS4015 教训）：警告后尝试复用已有索引
-            match ctx.rt.block_on(vector::build_vector_index(
-                ctx.repo_abs,
-                &index_dir,
-                embed.clone(),
-                mode,
-            )) {
-                Ok(report) => eprintln!(
-                    "# 向量索引: {} chunks（嵌入 {} 复用 {} 清理 {}）",
-                    report.chunks_total, report.embedded, report.reused, report.gc_removed
-                ),
-                Err(e) => {
-                    tracing::warn!(component = "vector_build", error = %e, "向量索引构建失败（降级：尝试复用已有索引）");
-                    // P005 R5.2：非致命降级进审计留痕（best-effort）
+    let idx = vector::store::index_path(&index_dir, &vector::store::fingerprint(ctx.repo_abs));
+    let mut lost_retries: u32 = 0;
+    loop {
+        match crate::bootlock::acquire_guard(
+            ctx.repo_abs,
+            crate::bootlock::DEFAULT_TIMEOUT,
+            "向量索引构建",
+        )? {
+            crate::bootlock::BootLockOutcome::Won(vguard) => {
+                // 索引补建失败不致命（弹性降级，E3-R1 engram CS4015 教训）：警告后尝试复用已有索引
+                match ctx.rt.block_on(vector::build_vector_index(
+                    ctx.repo_abs,
+                    &index_dir,
+                    embed.clone(),
+                    mode,
+                )) {
+                    Ok(report) => eprintln!(
+                        "# 向量索引: {} chunks（嵌入 {} 复用 {} 清理 {}）",
+                        report.chunks_total, report.embedded, report.reused, report.gc_removed
+                    ),
+                    Err(e) => {
+                        tracing::warn!(component = "vector_build", error = %e, "向量索引构建失败（降级：尝试复用已有索引）");
+                        // P005 R5.2：非致命降级进审计留痕（best-effort）
+                        let _ = ctx.audit.record(
+                            "degraded",
+                            &serde_json::json!({"component": "vector_build", "error": e.to_string()}),
+                        );
+                    }
+                }
+                drop(vguard); // 构建段结束即放锁（D014：锁不跨 LLM 调用、不罩检索）
+                break;
+            }
+            crate::bootlock::BootLockOutcome::OpponentFinished if idx.exists() => {
+                eprintln!("# 向量索引: 另一进程刚完成构建，复用其产物（D020）");
+                break;
+            }
+            crate::bootlock::BootLockOutcome::OpponentFinished => {
+                lost_retries += 1;
+                if lost_retries > 3 {
+                    tracing::warn!(
+                        component = "vector_build",
+                        "对手释放引导锁但产物缺失（疑似中途崩溃），放弃复用，弹性降级为无召回层"
+                    );
                     let _ = ctx.audit.record(
                         "degraded",
-                        &serde_json::json!({"component": "vector_build", "error": e.to_string()}),
+                        &serde_json::json!({"component": "vector_build", "error": "opponent_lost_without_artifact"}),
                     );
+                    break;
                 }
+                tracing::warn!(
+                    component = "vector_build",
+                    "对手释放引导锁但向量索引产物缺失，重新竞争引导锁（{lost_retries}/3）"
+                );
             }
-            drop(vguard); // 构建段结束即放锁（D014：锁不跨 LLM 调用、不罩检索）
-        }
-        crate::bootlock::BootLockOutcome::OpponentFinished => {
-            eprintln!("# 向量索引: 另一进程刚完成构建，复用其产物（D020）");
         }
     }
-    let idx = vector::store::index_path(&index_dir, &vector::store::fingerprint(ctx.repo_abs));
     let store = match vector::VectorStore::open(&idx) {
         Ok(s) => s,
         Err(e) => {
@@ -748,12 +825,15 @@ fn config_set(key: String, value: String) -> CsResult<PathBuf> {
         std::fs::create_dir_all(parent)
             .map_err(|e| CsError::new(CONFIG_INVALID, format!("创建配置目录失败: {e}")))?;
     }
-    std::fs::write(
-        &path,
-        toml::to_string_pretty(&fc)
-            .map_err(|e| CsError::new(INTERNAL, format!("序列化失败: {e}")))?,
-    )
-    .map_err(|e| CsError::new(CONFIG_INVALID, format!("写入失败: {e}")))?;
+    // P007 R2.8：临时文件 + rename 原子写——直接 fs::write 中途崩溃会留半截 TOML，
+    // 后续所有 config::load 全局报 CS1012
+    let body = toml::to_string_pretty(&fc)
+        .map_err(|e| CsError::new(INTERNAL, format!("序列化失败: {e}")))?;
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, &body)
+        .map_err(|e| CsError::new(CONFIG_INVALID, format!("写入失败: {e}")))?;
+    std::fs::rename(&tmp, &path)
+        .map_err(|e| CsError::new(CONFIG_INVALID, format!("写入失败: {e}")))?;
     Ok(path)
 }
 
@@ -761,6 +841,36 @@ fn config_set(key: String, value: String) -> CsResult<PathBuf> {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    /// P007 R2.3/R2.4 回归：emit_write_check 两种留痕路径
+    #[test]
+    fn emit_write_check_records_changes_and_unavailable() {
+        let repo = tempfile::tempdir().unwrap();
+        let audit_dir = tempfile::tempdir().unwrap();
+        std::fs::write(repo.path().join("a.txt"), "v1").unwrap();
+        let before = crate::writeguard::snapshot(repo.path()).unwrap();
+
+        // append_line 要求审计文件已存在（先落一行种子）
+        let audit_path = audit_dir.path().join("s.log");
+        std::fs::write(&audit_path, "{\"seq\":1}\n").unwrap();
+
+        // ① 变更被检出并落 write_check 行
+        std::fs::write(repo.path().join("a.txt"), "v2").unwrap();
+        Cli::emit_write_check(Some(&before), repo.path(), &audit_path);
+        let line = std::fs::read_to_string(&audit_path).unwrap();
+        assert!(
+            line.contains("\"unattributed_changes\":1"),
+            "变更应被检出: {line}"
+        );
+
+        // ② 考前快照不可用 → available:false 而非静默
+        Cli::emit_write_check(None, repo.path(), &audit_path);
+        let line = std::fs::read_to_string(&audit_path).unwrap();
+        assert!(
+            line.contains("\"available\":false") && line.contains("guard_before_unavailable"),
+            "快照不可用应诚实留痕: {line}"
+        );
+    }
 
     /// P005 R7.3：index 非 --vector 的报错必须诚实——不再声称「--rebuild 已记录」。
     #[test]
