@@ -578,40 +578,41 @@ impl Cli {
         let mut require_counts: Vec<(String, usize)> = Vec::new();
         for pair in self.require_count.chunks(2) {
             if pair.len() != 2 {
-                return Err(CsError::new(
-                    USER_INPUT,
-                    "--require-count 需要 MARKER N 成对给出",
-                )
-                .with_hint("示例：--require-count '<!--doc:start:a1-->' 3"));
+                return Err(
+                    CsError::new(USER_INPUT, "--require-count 需要 MARKER N 成对给出")
+                        .with_hint("示例：--require-count '<!--doc:start:a1-->' 3"),
+                );
             }
             let n: usize = pair[1].parse().map_err(|_| {
-                CsError::new(USER_INPUT, format!("--require-count 的 N 非法: {}", pair[1]))
-                    .with_hint("N 为非负整数（标记需出现的最少次数）")
+                CsError::new(
+                    USER_INPUT,
+                    format!("--require-count 的 N 非法: {}", pair[1]),
+                )
+                .with_hint("N 为非负整数（标记需出现的最少次数）")
             })?;
             require_counts.push((pair[0].clone(), n));
         }
-        let agent = if self.require.is_empty()
-            && self.require_line.is_empty()
-            && require_counts.is_empty()
-        {
-            agent
-        } else {
-            let a = if self.require.is_empty() {
+        let agent =
+            if self.require.is_empty() && self.require_line.is_empty() && require_counts.is_empty()
+            {
                 agent
             } else {
-                agent.with_required_markers(self.require.clone())
+                let a = if self.require.is_empty() {
+                    agent
+                } else {
+                    agent.with_required_markers(self.require.clone())
+                };
+                let a = if self.require_line.is_empty() {
+                    a
+                } else {
+                    a.with_required_line_markers(self.require_line.clone())
+                };
+                if require_counts.is_empty() {
+                    a
+                } else {
+                    a.with_required_count_markers(require_counts)
+                }
             };
-            let a = if self.require_line.is_empty() {
-                a
-            } else {
-                a.with_required_line_markers(self.require_line.clone())
-            };
-            if require_counts.is_empty() {
-                a
-            } else {
-                a.with_required_count_markers(require_counts)
-            }
-        };
         // P007 R2.4：失败会话同样做考后自证——失败恰是最需要自证的会话
         let run_result = rt.block_on(agent.run(&task));
         drop(agent);
@@ -818,11 +819,11 @@ impl Cli {
             summary_path.display()
         );
         if failed > 0 {
-            return Err(CsError::new(
-                USER_INPUT,
-                format!("batch 部分任务失败: {failed}"),
-            )
-            .with_hint(format!("详见 {}（每条含 error 字段）", summary_path.display())));
+            return Err(
+                CsError::new(USER_INPUT, format!("batch 部分任务失败: {failed}")).with_hint(
+                    format!("详见 {}（每条含 error 字段）", summary_path.display()),
+                ),
+            );
         }
         Ok(())
     }
@@ -937,8 +938,12 @@ fn setup_vector_layer(
 
 /// D028：嵌入客户端构造（[vector] base_url/api_key 缺省时跟随 [llm]，P005 R7.1）。
 fn build_embed_client(cfg: &config::Config, api_key: &str) -> vector::EmbedClient {
-    let (embed_base, embed_key) =
-        resolve_embed_endpoint(cfg.vector.base_url.clone(), cfg.vector.api_key.clone(), &cfg.llm.base_url, api_key);
+    let (embed_base, embed_key) = resolve_embed_endpoint(
+        cfg.vector.base_url.clone(),
+        cfg.vector.api_key.clone(),
+        &cfg.llm.base_url,
+        api_key,
+    );
     vector::EmbedClient::new(
         &embed_base,
         &embed_key,
@@ -1170,12 +1175,10 @@ fn parse_batch_spec(text: &str) -> CsResult<Vec<BatchTaskSpec>> {
     let tasks_val = if v.is_array() {
         v
     } else {
-        v.get("tasks")
-            .cloned()
-            .ok_or_else(|| {
-                CsError::new(USER_INPUT, "任务清单缺 tasks 字段")
-                    .with_hint("格式：{\"tasks\":[{\"id\":\"doc-01\",\"task\":\"...\"}]}，或直接给数组")
-            })?
+        v.get("tasks").cloned().ok_or_else(|| {
+            CsError::new(USER_INPUT, "任务清单缺 tasks 字段")
+                .with_hint("格式：{\"tasks\":[{\"id\":\"doc-01\",\"task\":\"...\"}]}，或直接给数组")
+        })?
     };
     serde_json::from_value::<Vec<BatchTaskSpec>>(tasks_val).map_err(|e| {
         CsError::new(USER_INPUT, format!("任务条目解析失败: {e}"))
@@ -1248,7 +1251,9 @@ async fn run_batch_session(
     };
     let mut registry = tools::ToolRegistry::new();
     registry.register(Box::new(tools::read::ReadTool::new(boot.fence.clone())));
-    registry.register(Box::new(tools::fuzzy::FileFinderTool::new(boot.fuzzy.clone())));
+    registry.register(Box::new(tools::fuzzy::FileFinderTool::new(
+        boot.fuzzy.clone(),
+    )));
     registry.register(Box::new(tools::fuzzy::GrepTool::new(boot.fuzzy.clone())));
     let mut parts: Vec<String> = Vec::new();
     register_graph_tools(&boot.cg, &boot.cg_db, &mut registry, &mut parts);
@@ -1262,7 +1267,15 @@ async fn run_batch_session(
     };
     let mut first_suffix: Option<String> = None;
     if boot.vector_on {
-        match vector_attach(&ctx, &boot.cfg, boot.repo_map_on, boot.embed.clone(), &mut registry).await {
+        match vector_attach(
+            &ctx,
+            &boot.cfg,
+            boot.repo_map_on,
+            boot.embed.clone(),
+            &mut registry,
+        )
+        .await
+        {
             Ok(Some(s)) => first_suffix = Some(s),
             Ok(None) => {}
             Err(e) => {
@@ -1320,8 +1333,10 @@ async fn run_batch_session(
     let _ = std::fs::create_dir_all(&reports_dir);
     let md_path = reports_dir.join(format!("{session_id}.md"));
     let _ = std::fs::write(&md_path, &human);
-    let _ = std::fs::write(reports_dir.join(format!("{session_id}.json")),
-        serde_json::to_string_pretty(&outcome.report).unwrap_or_default());
+    let _ = std::fs::write(
+        reports_dir.join(format!("{session_id}.json")),
+        serde_json::to_string_pretty(&outcome.report).unwrap_or_default(),
+    );
     let _ = std::fs::create_dir_all(out_dir);
     let id_md = out_dir.join(format!("{id}.md"));
     if let Err(e) = std::fs::write(&id_md, &human) {
@@ -1550,9 +1565,8 @@ mod tests {
     #[test]
     fn parses_batch_spec_array_and_object_forms() {
         // 裸数组
-        let specs = parse_batch_spec(r#"[{"task":"a"},{"id":"doc-1","task":"b"}]"#
-        )
-        .expect("裸数组形式应可解析");
+        let specs = parse_batch_spec(r#"[{"task":"a"},{"id":"doc-1","task":"b"}]"#)
+            .expect("裸数组形式应可解析");
         assert_eq!(specs.len(), 2);
         assert_eq!(specs[0].task, "a");
         assert_eq!(specs[1].id.as_deref(), Some("doc-1"));
@@ -1560,10 +1574,9 @@ mod tests {
         let specs = parse_batch_spec(r#"{"tasks":[{"task":"a"}]}"#).expect("对象包裹应可解析");
         assert_eq!(specs.len(), 1);
         // 契约字段可带（require_count 元组数组）
-        let specs = parse_batch_spec(
-            r#"[{"task":"a","require":["m1"],"require_count":[["n",2]]}]"#,
-        )
-        .expect("带契约字段应可解析");
+        let specs =
+            parse_batch_spec(r#"[{"task":"a","require":["m1"],"require_count":[["n",2]]}]"#)
+                .expect("带契约字段应可解析");
         assert_eq!(specs[0].require, vec!["m1".to_string()]);
         assert_eq!(specs[0].require_count, vec![("n".to_string(), 2)]);
     }
@@ -1572,7 +1585,11 @@ mod tests {
     fn batch_spec_errors_are_usage_level() {
         let e = parse_batch_spec("not json").unwrap_err();
         assert_eq!(e.code, USER_INPUT);
-        assert_eq!(parse_batch_spec("{}").unwrap_err().code, USER_INPUT, "缺 tasks 字段");
+        assert_eq!(
+            parse_batch_spec("{}").unwrap_err().code,
+            USER_INPUT,
+            "缺 tasks 字段"
+        );
         assert_eq!(
             parse_batch_spec(r#"[{"no_task":1}]"#).unwrap_err().code,
             USER_INPUT,
@@ -1612,9 +1629,22 @@ mod tests {
             "--vector",
         ])
         .unwrap();
-        assert!(matches!(cli.command, Some(Command::Batch { jobs: 3, vector: true, .. })));
-        let cli = Cli::try_parse_from(["codesleuth", "batch", "t.json", "--repo", "."])
-            .unwrap();
-        assert!(matches!(cli.command, Some(Command::Batch { jobs: 1, vector: false, .. })));
+        assert!(matches!(
+            cli.command,
+            Some(Command::Batch {
+                jobs: 3,
+                vector: true,
+                ..
+            })
+        ));
+        let cli = Cli::try_parse_from(["codesleuth", "batch", "t.json", "--repo", "."]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Batch {
+                jobs: 1,
+                vector: false,
+                ..
+            })
+        ));
     }
 }

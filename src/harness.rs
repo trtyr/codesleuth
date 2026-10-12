@@ -84,9 +84,10 @@ impl Harness {
 
     /// D027（EN-11）：出现次数契约——标记出现次数 ≥ min 才算产出。
     pub fn with_required_count_markers(mut self, reqs: Vec<(String, usize)>) -> Self {
-        self.required.extend(reqs.into_iter().map(
-            |(marker, min)| OutputRequirement::CountAtLeast { marker, min },
-        ));
+        self.required.extend(
+            reqs.into_iter()
+                .map(|(marker, min)| OutputRequirement::CountAtLeast { marker, min }),
+        );
         self
     }
 
@@ -813,9 +814,7 @@ impl OutputRequirement {
             OutputRequirement::LineStart(m) => format!("「{m}」（必须独占行首）"),
             OutputRequirement::CountAtLeast { marker, min } => {
                 let actual = answer.matches(marker.as_str()).count();
-                format!(
-                    "「{marker}」出现 {actual} 次（要求 ≥ {min} 次；复述/引用标记不计为产出）"
-                )
+                format!("「{marker}」出现 {actual} 次（要求 ≥ {min} 次；复述/引用标记不计为产出）")
             }
         }
     }
@@ -1226,8 +1225,12 @@ mod tests {
     #[tokio::test]
     async fn require_count_rejects_reference_gaming_then_recovers() {
         let marker = "<!--doc:start:a1-->".to_string();
-        let gaming = serde_json::json!({"answer": format!("已逐字包含以下标记：{marker}（复述不产出）")}).to_string();
-        let proper = serde_json::json!({"answer": format!("第一段 {marker}\n正文\n第二段 {marker}\n结论")}).to_string();
+        let gaming =
+            serde_json::json!({"answer": format!("已逐字包含以下标记：{marker}（复述不产出）")})
+                .to_string();
+        let proper =
+            serde_json::json!({"answer": format!("第一段 {marker}\n正文\n第二段 {marker}\n结论")})
+                .to_string();
         let script = vec![
             resp_call("1", "submit_report", &gaming),
             resp_call("2", "submit_report", &proper),
@@ -1239,8 +1242,15 @@ mod tests {
             script: Mutex::new(script.into_iter().collect()),
             seen: seen.clone(),
         });
-        let harness = Harness::new(provider, ToolRegistry::new(), audit, "m".into(), 1_000_000, 60)
-            .with_required_count_markers(vec![(marker.clone(), 2)]);
+        let harness = Harness::new(
+            provider,
+            ToolRegistry::new(),
+            audit,
+            "m".into(),
+            1_000_000,
+            60,
+        )
+        .with_required_count_markers(vec![(marker.clone(), 2)]);
         let res = harness.run("任务").await;
         let out = res.expect("修复轮真实产出后应收敛");
         assert_eq!(out.report.answer.matches(marker.as_str()).count(), 2);
@@ -1265,8 +1275,15 @@ mod tests {
             script: Mutex::new(script.into_iter().collect()),
             seen: Arc::new(Mutex::new(Vec::new())),
         });
-        let harness = Harness::new(provider, ToolRegistry::new(), audit, "m".into(), 1_000_000, 60)
-            .with_required_count_markers(vec![(marker.to_string(), 2)]);
+        let harness = Harness::new(
+            provider,
+            ToolRegistry::new(),
+            audit,
+            "m".into(),
+            1_000_000,
+            60,
+        )
+        .with_required_count_markers(vec![(marker.to_string(), 2)]);
         let res = harness.run("任务").await;
         let err = res.expect_err("修复轮后计数仍不足应判失败");
         assert_eq!(err.code, OUTPUT_CONTRACT);
@@ -1275,11 +1292,17 @@ mod tests {
     /// D027：计数语义单元——matches 计数、引用不豁免、describe 带实际次数。
     #[test]
     fn count_requirement_semantics() {
-        let r = OutputRequirement::CountAtLeast { marker: "<!--x-->".into(), min: 2 };
+        let r = OutputRequirement::CountAtLeast {
+            marker: "<!--x-->".into(),
+            min: 2,
+        };
         assert!(!r.satisfied_by("引用<!--x-->一次不算"));
         assert!(r.satisfied_by("<!--x--><!--x-->"));
         let d = r.describe("仅<!--x-->一次");
-        assert!(d.contains("出现 1 次") && d.contains("≥ 2"), "describe: {d}");
+        assert!(
+            d.contains("出现 1 次") && d.contains("≥ 2"),
+            "describe: {d}"
+        );
     }
 
     /// D022：实战博弈样本②——全部标记塞同一行，LineStart 语义结构性不通过；

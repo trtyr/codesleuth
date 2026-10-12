@@ -31,7 +31,10 @@ fn human_mode_error_stays_human_readable() {
     let out = run(&["--repo", "."]);
     assert_ne!(out.status.code(), Some(0));
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("CS1001"), "人读模式保留 CS 码主行: {stderr}");
+    assert!(
+        stderr.contains("CS1001"),
+        "人读模式保留 CS 码主行: {stderr}"
+    );
     assert!(
         !stderr.lines().any(|l| l.starts_with("{\"code\":")),
         "人读模式不输出 JSON 错误体"
