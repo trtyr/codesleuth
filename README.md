@@ -101,12 +101,20 @@ codesleuth "鉴权中间件在哪，被哪些路由使用？" --repo /path/to/pr
 # 机器可读 JSON（schema 版本化，供上游 agent 消费）
 codesleuth "错误处理有哪些模式？" --repo . --output-format json --out report.json
 
-# 上游编排场景：raw 交付 + 输出契约（--require 逐字包含 / --require-line 独占行首，防一行流糊弄；
+# 上游编排场景：raw 交付 + 输出契约（--require 逐字包含 / --require-line 独占行首 /
+# --require-count <MARKER> <N> 出现次数 ≥ N，防引用式糊弄；
 # 缺失自动补一轮修复，仍缺判 CS2005）
 codesleuth "整理功能清单" --repo . --output-format raw \
   --require-line "<!--FEATURE-INDEX-->" --require-line "```feature-index"
 
-# 多模型档位：--profile 选用 [llm.profiles.<名字>]；--model/--base-url 旗标仍可再压
+# 批量模式：单进程多会话，boot 一次全任务共享（引导成本 O(1) 不随任务数膨胀）
+codesleuth batch tasks.json --repo . --jobs 3 --vector --out-dir batch-out
+# tasks.json：[{"id":"doc-01","task":"...","require_count":[["<!--m-->",2]]}]
+# 产物：batch-out/<id>.md + summary.json（编排层按 id 对号）
+
+# 引导锁等待基准 --lock-timeout <秒>：对手推进中自动延展（上限 2×）；
+# --stale-ok：接受略旧索引，跳过 boot 期新鲜度检查
+
 codesleuth "这个模块的测试覆盖如何？" --repo . --profile review
 
 # 索引管理（向量索引；结构索引由 codegraph 在 run 时按需自建，重建用 run --fresh-index）
@@ -114,6 +122,8 @@ codesleuth index /path/to/project --vector      # 语义召回：向量化全仓
 ```
 
 `--vector` 说明：首建按块嵌入（一次性，之后 text_hash 增量复用 + 失效块自动清理，改一行只重嵌一块）；索引存在 `<project>/.codesleuth/`，跟项目走。`[vector]` 段不配置时全部走默认值。
+
+索引排除：默认尊重 `.gitignore`；仓库可放 `.codesleuthignore`（gitignore 语法），或在配置 `[index] exclude = ["docs/**"]` 精确圈定侦察范围（交付文档不入索引，不再触发重嵌抖动）。
 
 </details>
 
