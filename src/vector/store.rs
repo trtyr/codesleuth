@@ -16,13 +16,14 @@ pub fn chunk_key(c: &Chunk) -> String {
     format!("{}\u{1}{}\u{1}{}", c.file, c.symbol, c.line_start)
 }
 
-/// 仓库指纹：sha256(绝对路径 + git HEAD) 前 16 hex。索引按此键控隔离。
+/// 仓库指纹：sha256(绝对路径) 前 16 hex。索引按此键控隔离。
+/// D024（EN-7）：不再含 git HEAD——HEAD 一变整库判过期、全量重嵌（嵌入 5049 复用 0）
+/// 的根因就在这。内容变化检测下沉到 chunk 级：vectors.db 的 existing_hashes 对
+/// 组装后嵌入输入做 hash diff（build.rs 既有逻辑），只嵌变更块、GC 清死块；
+/// 模型/维度/模式变更仍由 stale_index 检查全量重嵌（换输入 = 旧向量投毒，必须重嵌）。
 pub fn fingerprint(repo_abs: &Path) -> String {
     let mut h = Sha256::new();
     h.update(repo_abs.to_string_lossy().as_bytes());
-    if let Ok(head) = std::fs::read(repo_abs.join(".git").join("HEAD")) {
-        h.update(&head);
-    }
     let d = h.finalize();
     d.iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
@@ -447,6 +448,29 @@ mod tests {
         assert_eq!(a, a2);
         assert_ne!(a, b);
         assert_eq!(a.len(), 16);
+    }
+
+    /// D024（EN-7）回归：git HEAD 变化不再改变指纹/索引路径——旧实现 HEAD 一变
+    /// 整库判过期，全量重嵌（嵌入 5049 复用 0）。内容变化检测下沉到 chunk 级 hash diff。
+    #[test]
+    fn fingerprint_stable_across_git_head_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = dir.path().join(".git");
+        std::fs::create_dir_all(&git).unwrap();
+        std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        let before = fingerprint(dir.path());
+        // 模拟 commit / 切分支：HEAD 内容变化
+        std::fs::write(git.join("HEAD"), "ref: refs/heads/feature-x\n").unwrap();
+        let after = fingerprint(dir.path());
+        assert_eq!(
+            before, after,
+            "HEAD 变化不得改变指纹（否则整库重嵌，EN-7 回归）"
+        );
+        // 索引路径同理稳定（cli/build 都经 index_path(state_dir, fp) 键控）
+        assert_eq!(
+            index_path(dir.path(), &before),
+            index_path(dir.path(), &after),
+        );
     }
 
     #[test]
