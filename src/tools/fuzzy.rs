@@ -264,4 +264,37 @@ mod tests {
         assert!(run(&f, serde_json::json!({})).await.is_err());
         assert!(run(&g, serde_json::json!({})).await.is_err());
     }
+
+    /// D028（EN-12）：共享引擎并发压测——batch 多会话同打一个 Arc<FuzzyEngine>，
+    /// 无竞态/无 panic/命中正确（工具面无状态，引擎内部同步原语足够）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn shared_engine_survives_concurrent_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..8 {
+            std::fs::write(
+                dir.path().join(format!("f{i}.rs")),
+                format!("fn needle_{i}() {{}}\n"),
+            )
+            .unwrap();
+        }
+        let grep = Arc::new(GrepTool::new(engine_for(dir.path())));
+        let mut handles = Vec::new();
+        for i in 0..24 {
+            let g = Arc::clone(&grep);
+            handles.push(tokio::spawn(async move {
+                run(
+                    &*g,
+                    serde_json::json!({ "pattern": format!("needle_{}", i % 8) }),
+                )
+                .await
+            }));
+        }
+        for (i, h) in handles.into_iter().enumerate() {
+            let out = h.await.unwrap().expect("并发执行不应失败");
+            assert!(
+                out.contains(&format!("needle_{}", i % 8)),
+                "会话 {i} 应命中自己的模式: {out}"
+            );
+        }
+    }
 }

@@ -11,7 +11,7 @@ use crate::errors::{
 };
 use crate::{audit, fence, harness, llm, tools, vector};
 use clap::{Parser, Subcommand, ValueEnum};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -105,6 +105,32 @@ pub enum Command {
         #[arg(long, value_name = "SECS")]
         lock_timeout: Option<u64>,
     },
+    /// 批量模式（D028/EN-12）：单进程多会话，boot 一次全任务共享（引导成本 O(1)）
+    Batch {
+        /// 任务清单（JSON 数组或 {"tasks":[...]}；每条 id/task/require/require_line/require_count）
+        path: PathBuf,
+        /// 目标仓库根目录
+        #[arg(long, value_name = "PATH")]
+        repo: PathBuf,
+        /// 并发会话数（boot 始终共享；jobs 只影响并发度）
+        #[arg(long, value_name = "N", default_value_t = 1)]
+        jobs: usize,
+        /// 启用向量召回（产物全任务共享）
+        #[arg(long)]
+        vector: bool,
+        /// 启用 repo map 导航图
+        #[arg(long)]
+        repo_map: bool,
+        /// 接受略旧索引（EN-8/D025）
+        #[arg(long)]
+        stale_ok: bool,
+        /// 引导锁等待基准（EN-9/D025）：秒；默认 300
+        #[arg(long, value_name = "SECS")]
+        lock_timeout: Option<u64>,
+        /// 每任务产物目录（Q004：<id>.md + summary.json）
+        #[arg(long, value_name = "DIR", default_value = "codesleuth-batch-out")]
+        out_dir: PathBuf,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -156,6 +182,39 @@ impl Cli {
                     let e = index_structure_error();
                     Self::report_error_for(json_mode, &e);
                     e.exit_code()
+                }
+            }
+            Some(Command::Batch {
+                path: ref spec_path,
+                repo: ref batch_repo,
+                jobs,
+                vector,
+                repo_map,
+                stale_ok,
+                lock_timeout,
+                ref out_dir,
+            }) => {
+                // EN-8/D025：--fresh-index 显式重建优先
+                let stale = stale_ok && !self.fresh_index;
+                match Self::run_batch(
+                    &self,
+                    &overrides,
+                    session_id,
+                    spec_path,
+                    batch_repo,
+                    jobs,
+                    out_dir,
+                    vector,
+                    repo_map,
+                    stale,
+                    lock_timeout,
+                    self.fresh_index,
+                ) {
+                    Ok(()) => 0,
+                    Err(e) => {
+                        Self::report_error_for(json_mode, &e);
+                        e.exit_code()
+                    }
                 }
             }
             None => self.run_task(session_id),
@@ -443,30 +502,11 @@ impl Cli {
                 None
             }
         };
-        // 诚实工具面（QA FINDING-009）：codegraph 无符号（非代码仓/未建索引）→ 不注册图工具，
-        // 并给 agent 地形提示——否则它会反复调用空结果的图工具直至零增量熔断。
+        // 诚实工具面（QA FINDING-009）：codegraph 无符号 → 不注册图工具，给地形提示
         let cg_db = repo_abs.join(".codegraph").join("codegraph.db");
-        let graph_symbols_nonempty = cg.is_some()
-            && crate::vector::repomap::repo_map_inputs(&cg_db)
-                .map(|(s, _)| !s.is_empty())
-                .unwrap_or(false);
         let mut parts: Vec<String> = Vec::new();
         let mut first_suffix: Option<String> = None;
-        if let Some(cg) = &cg {
-            if graph_symbols_nonempty {
-                registry.register(Box::new(tools::graph::ExploreTool::new(cg.clone())));
-                registry.register(Box::new(tools::graph::CallersTool::new(cg.clone())));
-                registry.register(Box::new(tools::graph::CalleesTool::new(cg.clone())));
-                registry.register(Box::new(tools::graph::ImpactTool::new(cg.clone())));
-                registry.register(Box::new(tools::graph::FilesTool::new(cg.clone())));
-            } else {
-                tracing::info!("# codegraph 无符号索引（非代码仓）：图工具未注册");
-                parts.push(
-                    "〔地形提示〕本仓库无结构图索引（非代码仓或未建索引）：explore/callers/callees/impact 不可用。请用 find_files（带关键词）与 grep（带内容模式）探索，用 read 阅读具体文件。"
-                        .into(),
-                );
-            }
-        }
+        register_graph_tools(&cg, &cg_db, &mut registry, &mut parts);
 
         // P003 E1b/E2 v2：向量层 + 任务相关导航图（召回命中喂地图当种子，首条消息一次性注入）
         if self.vector {
@@ -622,6 +662,168 @@ impl Cli {
             md_path.display(),
             outcome.audit_path.display()
         );
+
+        Ok(())
+    }
+    /// D028（EN-12）：batch 编排——boot 一次（graph 引导 + 向量构建），N 会话并发复用。
+    /// 产物契约（Q004）：out_dir/<id>.md（每任务正文）+ summary.json（编排层对号）；
+    /// 全局 reports/ 仍按 session 隔离。失败不中断批量，summary 记录，任一失败退出码 1。
+    #[allow(clippy::too_many_arguments)]
+    fn run_batch(
+        &self,
+        overrides: &CliOverrides,
+        session_id: &str,
+        spec_path: &Path,
+        repo: &Path,
+        jobs: usize,
+        out_dir: &Path,
+        vector: bool,
+        repo_map: bool,
+        stale_ok: bool,
+        lock_timeout: Option<u64>,
+        fresh_index: bool,
+    ) -> CsResult<()> {
+        let spec_text = std::fs::read_to_string(spec_path).map_err(|e| {
+            CsError::new(USER_INPUT, format!("任务清单读取失败: {e}"))
+                .with_hint("清单为 JSON 数组或 {\"tasks\":[...]}")
+        })?;
+        let specs = parse_batch_spec(&spec_text)?;
+        if specs.is_empty() {
+            return Err(CsError::new(USER_INPUT, "任务清单为空"));
+        }
+        let jobs = jobs.max(1);
+        let repo_abs = dunce::canonicalize(repo).map_err(|e| {
+            CsError::new(
+                REPO_NOT_FOUND,
+                format!("目标仓库不存在或不可达: {}", repo.display()),
+            )
+            .with_source(format!("canonicalize: {e}"))
+        })?;
+        let cfg = config::load(overrides.clone())?;
+        let api_key = cfg.resolve_api_key()?;
+        let state_dir = crate::config::global_state_dir()
+            .ok_or_else(|| CsError::new(CONFIG_MISSING, "找不到 HOME（无法定位 ~/.codesleuth）"))?;
+        let lock_timeout_d = Duration::from_secs(lock_timeout.unwrap_or(300));
+        let boot_audit = audit::Audit::create(&state_dir, session_id)?;
+        eprintln!(
+            "# batch: {} 任务 · jobs {jobs} · boot 开始（一次共享，不随任务数膨胀）",
+            specs.len()
+        );
+
+        // ---- boot（一次）：graph 引导 + 向量构建，锁内串行完成（D014/D025 语义不变）----
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| CsError::new(INTERNAL, format!("tokio runtime 启动失败: {e}")))?;
+        let cg = match rt.block_on(tools::graph::CodegraphEngine::start(
+            &repo_abs,
+            &cfg.graph.bin,
+            fresh_index,
+            lock_timeout_d,
+        )) {
+            Ok(e) => Some(Arc::new(e)),
+            Err(e) if e.code == INDEX_LOCKED => return Err(e),
+            Err(e) => {
+                tracing::warn!(component = "codegraph", error = %e, "codegraph 未就绪，结构工具降级（其余继续）");
+                record_degraded(&boot_audit, "codegraph", &e);
+                None
+            }
+        };
+        let embed = build_embed_client(&cfg, &api_key);
+        if vector {
+            vector_boot(
+                &repo_abs,
+                &cfg,
+                &embed,
+                stale_ok,
+                lock_timeout_d,
+                &boot_audit,
+                &rt,
+            )?;
+        }
+        let cg_db = repo_abs.join(".codegraph").join("codegraph.db");
+        let fence = Arc::new(fence::Fence::new(&repo_abs)?);
+        let fuzzy = Arc::new(tools::fuzzy::FuzzyEngine::new(&repo_abs)?);
+        let provider: llm::SharedProvider = Arc::new(llm::OpenAiProvider::new(
+            &cfg.llm.base_url,
+            &api_key,
+            2,
+            cfg.thinking_disabled,
+        ));
+        let boot = Arc::new(BatchBoot {
+            repo_abs,
+            state_dir,
+            cfg,
+            api_key,
+            provider,
+            fence,
+            fuzzy,
+            rt,
+            cg,
+            cg_db,
+            vector_on: vector,
+            repo_map_on: repo_map,
+            embed,
+        });
+
+        // ---- 会话并发：信号量限流，失败不中断批量 ----
+        let sem = Arc::new(tokio::sync::Semaphore::new(jobs));
+        let t0 = std::time::Instant::now();
+        let outcomes = boot.rt.block_on(async {
+            let mut handles = Vec::new();
+            for (idx, spec) in specs.into_iter().enumerate() {
+                let permit = Arc::clone(&sem).acquire_owned().await.ok();
+                let boot2 = Arc::clone(&boot);
+                let sid = format!("{}-b{}", audit::new_session_id(), idx);
+                let id = batch_task_id(&spec, idx);
+                let spec = Arc::new(spec);
+                let out2 = out_dir.to_path_buf();
+                handles.push(tokio::spawn(async move {
+                    let _permit = permit;
+                    run_batch_session(&boot2, &spec, &sid, &id, &out2).await
+                }));
+            }
+            let mut outcomes = Vec::new();
+            for h in handles {
+                match h.await {
+                    Ok(o) => outcomes.push(o),
+                    Err(e) => outcomes.push(BatchTaskOutcome {
+                        id: "?".into(),
+                        session_id: "?".into(),
+                        status: "error",
+                        error: Some(format!("会话任务崩溃: {e}")),
+                        report_md: None,
+                    }),
+                }
+            }
+            outcomes
+        });
+
+        // ---- summary.json（Q004：编排层按 id 对号）----
+        let failed = outcomes.iter().filter(|o| o.status != "ok").count();
+        let _ = std::fs::create_dir_all(out_dir);
+        let summary = serde_json::json!({
+            "total": outcomes.len(),
+            "failed": failed,
+            "elapsed_ms": t0.elapsed().as_millis() as u64,
+            "tasks": outcomes,
+        });
+        let summary_path = out_dir.join("summary.json");
+        let summary_json = serde_json::to_string_pretty(&summary)
+            .map_err(|e| CsError::new(INTERNAL, format!("summary 序列化失败: {e}")))?;
+        std::fs::write(&summary_path, summary_json)
+            .map_err(|e| CsError::new(INTERNAL, format!("summary 写入失败: {e}")))?;
+        eprintln!(
+            "# batch 完成：{} 任务（失败 {failed}）· 耗时 {:.1}s · summary {}",
+            summary["total"].as_u64().unwrap_or(0),
+            t0.elapsed().as_secs_f32(),
+            summary_path.display()
+        );
+        if failed > 0 {
+            return Err(CsError::new(
+                USER_INPUT,
+                format!("batch 部分任务失败: {failed}"),
+            )
+            .with_hint(format!("详见 {}（每条含 error 字段）", summary_path.display())));
+        }
         Ok(())
     }
 }
@@ -719,23 +921,46 @@ fn setup_vector_layer(
     lock_timeout: Duration,
     registry: &mut tools::ToolRegistry,
 ) -> CsResult<Option<String>> {
-    let mode = match cfg.vector.embed_mode.as_str() {
-        "raw" => vector::EmbedMode::Raw,
-        _ => vector::EmbedMode::Composite,
-    };
-    // 嵌入可用独立供应商：[vector] base_url/api_key 缺省时跟随 [llm]（P005 R7.1 去重）
-    let (embed_base, embed_key) = resolve_embed_endpoint(
-        cfg.vector.base_url.clone(),
-        cfg.vector.api_key.clone(),
-        &cfg.llm.base_url,
-        ctx.api_key,
-    );
-    let embed = vector::EmbedClient::new(
+    let embed = build_embed_client(cfg, ctx.api_key);
+    vector_boot(
+        ctx.repo_abs,
+        cfg,
+        &embed,
+        stale_ok,
+        lock_timeout,
+        ctx.audit,
+        ctx.rt,
+    )?;
+    ctx.rt
+        .block_on(vector_attach(ctx, cfg, repo_map, embed, registry))
+}
+
+/// D028：嵌入客户端构造（[vector] base_url/api_key 缺省时跟随 [llm]，P005 R7.1）。
+fn build_embed_client(cfg: &config::Config, api_key: &str) -> vector::EmbedClient {
+    let (embed_base, embed_key) =
+        resolve_embed_endpoint(cfg.vector.base_url.clone(), cfg.vector.api_key.clone(), &cfg.llm.base_url, api_key);
+    vector::EmbedClient::new(
         &embed_base,
         &embed_key,
         &cfg.vector.embed_model,
         cfg.vector.embed_dims,
-    );
+    )
+}
+
+/// D028（EN-12）：向量引导段——构建/刷新只做一次，N 会话 attach 复用产物（batch 核心收益）。
+fn vector_boot(
+    repo_abs: &Path,
+    cfg: &config::Config,
+    embed: &vector::EmbedClient,
+    stale_ok: bool,
+    lock_timeout: Duration,
+    boot_audit: &audit::Audit,
+    rt: &tokio::runtime::Runtime,
+) -> CsResult<()> {
+    let mode = match cfg.vector.embed_mode.as_str() {
+        "raw" => vector::EmbedMode::Raw,
+        _ => vector::EmbedMode::Composite,
+    };
     // D014：向量构建与 graph 引导共用仓库级引导锁，进程间串行化；
     // D020：等待后获得 = 对手刚完成构建，产物已就绪，跳过构建直接开库。
     // P007 R2.5：Lost≠产物就绪——对手可能中途崩溃留下缺失/残缺产物；
@@ -743,8 +968,8 @@ fn setup_vector_layer(
     // EN-8/D025：--stale-ok 且产物在 → 跳过引导刷新（新鲜度检查/补建），直接开库。
     // 文档直出等已知入口场景：略旧索引完全可接受，不值得付重嵌成本与锁争用。
     // stale_ok 传入前已合并 fresh_index（显式重建优先）；索引缺失仍走正常构建。
-    let index_dir = vector::store::project_index_dir(ctx.repo_abs);
-    let idx = vector::store::index_path(&index_dir, &vector::store::fingerprint(ctx.repo_abs));
+    let index_dir = vector::store::project_index_dir(repo_abs);
+    let idx = vector::store::index_path(&index_dir, &vector::store::fingerprint(repo_abs));
     let skip_refresh = stale_ok && idx.exists();
     if skip_refresh {
         eprintln!("# 向量索引: --stale-ok 跳过引导刷新，直接使用现有索引（EN-8/D025）");
@@ -752,12 +977,11 @@ fn setup_vector_layer(
     if !skip_refresh {
         let mut lost_retries: u32 = 0;
         loop {
-            match crate::bootlock::acquire_guard(ctx.repo_abs, lock_timeout, "向量索引构建")?
-            {
+            match crate::bootlock::acquire_guard(repo_abs, lock_timeout, "向量索引构建")? {
                 crate::bootlock::BootLockOutcome::Won(vguard) => {
                     // 索引补建失败不致命（弹性降级，E3-R1 engram CS4015 教训）：警告后尝试复用已有索引
-                    match ctx.rt.block_on(vector::build_vector_index(
-                        ctx.repo_abs,
+                    match rt.block_on(vector::build_vector_index(
+                        repo_abs,
                         &index_dir,
                         embed.clone(),
                         mode,
@@ -770,7 +994,7 @@ fn setup_vector_layer(
                         Err(e) => {
                             tracing::warn!(component = "vector_build", error = %e, "向量索引构建失败（降级：尝试复用已有索引）");
                             // P005 R5.2：非致命降级进审计留痕（best-effort）
-                            record_degraded(ctx.audit, "vector_build", &e);
+                            record_degraded(boot_audit, "vector_build", &e);
                         }
                     }
                     drop(vguard); // 构建段结束即放锁（D014：锁不跨 LLM 调用、不罩检索）
@@ -787,7 +1011,7 @@ fn setup_vector_layer(
                             component = "vector_build",
                             "对手释放引导锁但产物缺失（疑似中途崩溃），放弃复用，弹性降级为无召回层"
                         );
-                        let _ = ctx.audit.record(
+                        let _ = boot_audit.record(
                         "degraded",
                         &serde_json::json!({"component": "vector_build", "error": "opponent_lost_without_artifact"}),
                     );
@@ -801,6 +1025,20 @@ fn setup_vector_layer(
             }
         }
     } // if !skip_refresh
+    Ok(())
+}
+
+/// D028：向量挂载段（每会话）——开库→召回引擎→注册工具→召回 + 导航图后缀。
+/// async 化：batch 会话跑在 tokio 任务内不能 block_on（单 run 由 setup 外层 block_on）。
+async fn vector_attach(
+    ctx: &VectorLayerCtx<'_>,
+    cfg: &config::Config,
+    repo_map: bool,
+    embed: vector::EmbedClient,
+    registry: &mut tools::ToolRegistry,
+) -> CsResult<Option<String>> {
+    let index_dir = vector::store::project_index_dir(ctx.repo_abs);
+    let idx = vector::store::index_path(&index_dir, &vector::store::fingerprint(ctx.repo_abs));
     let store = match vector::VectorStore::open(&idx) {
         Ok(s) => s,
         Err(e) => {
@@ -822,7 +1060,7 @@ fn setup_vector_layer(
         Arc::clone(&recall),
     )));
     // 召回先行（P003 E2 v2）：命中喂给导航图当种子；失败降级为无后缀
-    let hits = match ctx.rt.block_on(recall.recall(ctx.task, 10)) {
+    let hits = match recall.recall(ctx.task, 10).await {
         Ok(h) => h,
         Err(e) => {
             tracing::warn!(component = "recall", error = %e, "召回失败（跳过注入）");
@@ -878,6 +1116,229 @@ fn setup_vector_layer(
         Ok(None)
     } else {
         Ok(Some(parts.join("\n\n")))
+    }
+}
+
+/// D028：图工具装配（每会话注册表）——codegraph 有符号才注册，否则地形提示（QA FINDING-009）。
+fn register_graph_tools(
+    cg: &Option<Arc<tools::graph::CodegraphEngine>>,
+    cg_db: &Path,
+    registry: &mut tools::ToolRegistry,
+    parts: &mut Vec<String>,
+) {
+    let graph_symbols_nonempty = cg.is_some()
+        && crate::vector::repomap::repo_map_inputs(cg_db)
+            .map(|(s, _)| !s.is_empty())
+            .unwrap_or(false);
+    if let Some(cg) = cg {
+        if graph_symbols_nonempty {
+            registry.register(Box::new(tools::graph::ExploreTool::new(cg.clone())));
+            registry.register(Box::new(tools::graph::CallersTool::new(cg.clone())));
+            registry.register(Box::new(tools::graph::CalleesTool::new(cg.clone())));
+            registry.register(Box::new(tools::graph::ImpactTool::new(cg.clone())));
+            registry.register(Box::new(tools::graph::FilesTool::new(cg.clone())));
+        } else {
+            tracing::info!("# codegraph 无符号索引（非代码仓）：图工具未注册");
+            parts.push(
+                "〔地形提示〕本仓库无结构图索引（非代码仓或未建索引）：explore/callers/callees/impact 不可用。请用 find_files（带关键词）与 grep（带内容模式）探索，用 read 阅读具体文件。"
+                    .into(),
+            );
+        }
+    }
+}
+
+// ---- D028（EN-12）：codesleuth batch——单进程多会话，boot 一次全任务共享 ----
+
+/// 批量任务条目（Q004 拍板：id 为产物命名元数据；契约三件套按任务声明）。
+#[derive(Debug, Clone, serde::Deserialize)]
+pub(crate) struct BatchTaskSpec {
+    /// 产物命名（缺省 task-<序号>）。
+    pub id: Option<String>,
+    pub task: String,
+    #[serde(default)]
+    pub require: Vec<String>,
+    #[serde(default)]
+    pub require_line: Vec<String>,
+    #[serde(default)]
+    pub require_count: Vec<(String, usize)>,
+}
+
+/// 解析任务清单：顶层对象 {"tasks":[...]} 或裸数组均可（纯函数可测）。
+fn parse_batch_spec(text: &str) -> CsResult<Vec<BatchTaskSpec>> {
+    let v: serde_json::Value = serde_json::from_str(text)
+        .map_err(|e| CsError::new(USER_INPUT, format!("任务清单不是合法 JSON: {e}")))?;
+    let tasks_val = if v.is_array() {
+        v
+    } else {
+        v.get("tasks")
+            .cloned()
+            .ok_or_else(|| {
+                CsError::new(USER_INPUT, "任务清单缺 tasks 字段")
+                    .with_hint("格式：{\"tasks\":[{\"id\":\"doc-01\",\"task\":\"...\"}]}，或直接给数组")
+            })?
+    };
+    serde_json::from_value::<Vec<BatchTaskSpec>>(tasks_val).map_err(|e| {
+        CsError::new(USER_INPUT, format!("任务条目解析失败: {e}"))
+            .with_hint("每条需含 task 字段；可选 id/require/require_line/require_count")
+    })
+}
+
+/// 产物命名（Q004）：id 缺省 task-<序号>（从 1 起，编排层友好）。
+fn batch_task_id(spec: &BatchTaskSpec, index: usize) -> String {
+    spec.id
+        .clone()
+        .unwrap_or_else(|| format!("task-{}", index + 1))
+}
+
+/// batch 进程级共享引导（构建一次，N 会话复用）：provider/fence/fuzzy/rt/graph/向量 boot。
+struct BatchBoot {
+    repo_abs: PathBuf,
+    state_dir: PathBuf,
+    cfg: config::Config,
+    api_key: String,
+    provider: llm::SharedProvider,
+    fence: Arc<fence::Fence>,
+    fuzzy: Arc<tools::fuzzy::FuzzyEngine>,
+    rt: tokio::runtime::Runtime,
+    cg: Option<Arc<tools::graph::CodegraphEngine>>,
+    cg_db: PathBuf,
+    vector_on: bool,
+    repo_map_on: bool,
+    embed: vector::EmbedClient,
+}
+
+/// 单任务执行结果（summary.json 条目）。
+#[derive(Debug, serde::Serialize)]
+struct BatchTaskOutcome {
+    id: String,
+    session_id: String,
+    status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    report_md: Option<String>,
+}
+
+/// 单会话执行（async：跑在 batch 的 tokio 任务内）。产物隔离：audit/report 按各自 session 分文件。
+async fn run_batch_session(
+    boot: &BatchBoot,
+    spec: &BatchTaskSpec,
+    session_id: &str,
+    id: &str,
+    out_dir: &Path,
+) -> BatchTaskOutcome {
+    let fail = |session_id: &str, msg: String| BatchTaskOutcome {
+        id: id.to_string(),
+        session_id: session_id.to_string(),
+        status: "error",
+        error: Some(msg),
+        report_md: None,
+    };
+    let audit = match audit::Audit::create(&boot.state_dir, session_id) {
+        Ok(a) => a,
+        Err(e) => return fail(session_id, format!("审计创建失败: {e}")),
+    };
+    let guard_before = match crate::writeguard::snapshot(&boot.repo_abs) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            tracing::warn!(component = "writeguard", error = %e, "考前快照失败，零写入自证将不可用");
+            let _ = audit.record("degraded", &serde_json::json!({"component": "writeguard", "stage": "before", "error": e.to_string()}));
+            None
+        }
+    };
+    let mut registry = tools::ToolRegistry::new();
+    registry.register(Box::new(tools::read::ReadTool::new(boot.fence.clone())));
+    registry.register(Box::new(tools::fuzzy::FileFinderTool::new(boot.fuzzy.clone())));
+    registry.register(Box::new(tools::fuzzy::GrepTool::new(boot.fuzzy.clone())));
+    let mut parts: Vec<String> = Vec::new();
+    register_graph_tools(&boot.cg, &boot.cg_db, &mut registry, &mut parts);
+    let ctx = VectorLayerCtx {
+        repo_abs: &boot.repo_abs,
+        task: &spec.task,
+        api_key: &boot.api_key,
+        cg_db: &boot.cg_db,
+        rt: &boot.rt,
+        audit: &audit,
+    };
+    let mut first_suffix: Option<String> = None;
+    if boot.vector_on {
+        match vector_attach(&ctx, &boot.cfg, boot.repo_map_on, boot.embed.clone(), &mut registry).await {
+            Ok(Some(s)) => first_suffix = Some(s),
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(component = "vector_layer", error = %e, "向量层装配失败（本会话无召回层，任务继续）");
+                record_degraded(&audit, "vector_layer", &e);
+            }
+        }
+    }
+    if first_suffix.is_none() && !parts.is_empty() {
+        first_suffix = Some(parts.join("\n\n"));
+    }
+    let audit_path = audit.path().to_path_buf();
+    let agent = harness::Harness::new(
+        boot.provider.clone(),
+        registry,
+        audit,
+        boot.cfg.llm.model.clone(),
+        boot.cfg.context.model_context_tokens,
+        boot.cfg.context.compact_at_percent,
+    );
+    let agent = match first_suffix {
+        Some(s) => agent.with_first_user_suffix(s),
+        None => agent,
+    };
+    let agent = {
+        let a = if spec.require.is_empty() {
+            agent
+        } else {
+            agent.with_required_markers(spec.require.clone())
+        };
+        let a = if spec.require_line.is_empty() {
+            a
+        } else {
+            a.with_required_line_markers(spec.require_line.clone())
+        };
+        if spec.require_count.is_empty() {
+            a
+        } else {
+            a.with_required_count_markers(spec.require_count.clone())
+        }
+    };
+    let run_result = agent.run(&spec.task).await;
+    drop(agent);
+    let outcome = match run_result {
+        Ok(o) => o,
+        Err(e) => {
+            Cli::emit_write_check(guard_before.as_ref(), &boot.repo_abs, &audit_path);
+            return fail(session_id, e.to_string());
+        }
+    };
+    Cli::emit_write_check(guard_before.as_ref(), &boot.repo_abs, &outcome.audit_path);
+    // 全局 reports/ 按 session 落盘（隔离）；out_dir/<id>.md 面向编排层（Q004）
+    let human = outcome.answer.clone();
+    let reports_dir = boot.state_dir.join("reports");
+    let _ = std::fs::create_dir_all(&reports_dir);
+    let md_path = reports_dir.join(format!("{session_id}.md"));
+    let _ = std::fs::write(&md_path, &human);
+    let _ = std::fs::write(reports_dir.join(format!("{session_id}.json")),
+        serde_json::to_string_pretty(&outcome.report).unwrap_or_default());
+    let _ = std::fs::create_dir_all(out_dir);
+    let id_md = out_dir.join(format!("{id}.md"));
+    if let Err(e) = std::fs::write(&id_md, &human) {
+        return fail(session_id, format!("批量产物写入失败: {e}"));
+    }
+    eprintln!(
+        "# [batch/{id}] 完成：{} turns · {} tool calls · 报告 {}",
+        outcome.turns,
+        outcome.tool_calls,
+        id_md.display()
+    );
+    BatchTaskOutcome {
+        id: id.to_string(),
+        session_id: session_id.to_string(),
+        status: "ok",
+        error: None,
+        report_md: Some(id_md.to_string_lossy().to_string()),
     }
 }
 
@@ -1082,5 +1543,78 @@ mod tests {
         let err = cli.run_task_inner("").unwrap_err();
         assert_eq!(err.code, USER_INPUT);
         assert_eq!(err.exit_code(), 1);
+    }
+
+    // ---- D028（EN-12）batch ----
+
+    #[test]
+    fn parses_batch_spec_array_and_object_forms() {
+        // 裸数组
+        let specs = parse_batch_spec(r#"[{"task":"a"},{"id":"doc-1","task":"b"}]"#
+        )
+        .expect("裸数组形式应可解析");
+        assert_eq!(specs.len(), 2);
+        assert_eq!(specs[0].task, "a");
+        assert_eq!(specs[1].id.as_deref(), Some("doc-1"));
+        // 对象包裹
+        let specs = parse_batch_spec(r#"{"tasks":[{"task":"a"}]}"#).expect("对象包裹应可解析");
+        assert_eq!(specs.len(), 1);
+        // 契约字段可带（require_count 元组数组）
+        let specs = parse_batch_spec(
+            r#"[{"task":"a","require":["m1"],"require_count":[["n",2]]}]"#,
+        )
+        .expect("带契约字段应可解析");
+        assert_eq!(specs[0].require, vec!["m1".to_string()]);
+        assert_eq!(specs[0].require_count, vec![("n".to_string(), 2)]);
+    }
+
+    #[test]
+    fn batch_spec_errors_are_usage_level() {
+        let e = parse_batch_spec("not json").unwrap_err();
+        assert_eq!(e.code, USER_INPUT);
+        assert_eq!(parse_batch_spec("{}").unwrap_err().code, USER_INPUT, "缺 tasks 字段");
+        assert_eq!(
+            parse_batch_spec(r#"[{"no_task":1}]"#).unwrap_err().code,
+            USER_INPUT,
+            "缺 task 字段"
+        );
+    }
+
+    #[test]
+    fn batch_task_id_defaults_to_index() {
+        let s = BatchTaskSpec {
+            id: None,
+            task: "t".into(),
+            require: vec![],
+            require_line: vec![],
+            require_count: vec![],
+        };
+        assert_eq!(batch_task_id(&s, 0), "task-1");
+        assert_eq!(batch_task_id(&s, 32), "task-33");
+        let named = BatchTaskSpec {
+            id: Some("doc-01".into()),
+            ..s
+        };
+        assert_eq!(batch_task_id(&named, 5), "doc-01");
+    }
+
+    /// batch 子命令解析：旗标可达 + 默认值
+    #[test]
+    fn parses_batch_subcommand() {
+        let cli = Cli::try_parse_from([
+            "codesleuth",
+            "batch",
+            "tasks.json",
+            "--repo",
+            ".",
+            "--jobs",
+            "3",
+            "--vector",
+        ])
+        .unwrap();
+        assert!(matches!(cli.command, Some(Command::Batch { jobs: 3, vector: true, .. })));
+        let cli = Cli::try_parse_from(["codesleuth", "batch", "t.json", "--repo", "."])
+            .unwrap();
+        assert!(matches!(cli.command, Some(Command::Batch { jobs: 1, vector: false, .. })));
     }
 }
