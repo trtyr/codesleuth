@@ -13,6 +13,7 @@ use crate::{audit, fence, harness, llm, tools, vector};
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -48,6 +49,14 @@ pub struct Cli {
     /// 启用向量召回暖启动 + vector_search 工具（P003）
     #[arg(long)]
     pub vector: bool,
+    /// 接受略旧索引（EN-8/D025）：--vector 引导期跳过新鲜度检查与补建，
+    /// 索引在则直接用（文档直出等已知入口场景）；索引缺失仍正常构建。
+    /// 与 --fresh-index 同给时以 --fresh-index 为准（显式重建优先）。
+    #[arg(long)]
+    pub stale_ok: bool,
+    /// 引导锁等待基准（EN-9/D025）：秒；对手推进中自动延展（上限 2×），默认 300
+    #[arg(long, value_name = "SECS")]
+    pub lock_timeout: Option<u64>,
     /// 输出契约（D021）：最终回答必须逐字包含的标记，可多次；缺失补一轮仍缺则判 CS2005
     #[arg(long = "require", value_name = "MARKER")]
     pub require: Vec<String>,
@@ -89,6 +98,9 @@ pub enum Command {
         /// 构建向量索引（嵌入 + text_hash 增量）
         #[arg(long)]
         vector: bool,
+        /// 引导锁等待基准（EN-9/D025）：秒；默认 300
+        #[arg(long, value_name = "SECS")]
+        lock_timeout: Option<u64>,
     },
 }
 
@@ -121,9 +133,13 @@ impl Cli {
         };
         match self.command {
             Some(Command::Config { action }) => run_config(action, self.profile.as_deref()),
-            Some(Command::Index { path, vector }) => {
+            Some(Command::Index {
+                path,
+                vector,
+                lock_timeout,
+            }) => {
                 if vector {
-                    match Self::run_index_vector(&overrides, &path) {
+                    match Self::run_index_vector(&overrides, &path, lock_timeout) {
                         Ok(()) => 0,
                         Err(e) => {
                             report_error(&e);
@@ -141,7 +157,11 @@ impl Cli {
         }
     }
 
-    fn run_index_vector(overrides: &CliOverrides, path: &PathBuf) -> CsResult<()> {
+    fn run_index_vector(
+        overrides: &CliOverrides,
+        path: &PathBuf,
+        lock_timeout: Option<u64>,
+    ) -> CsResult<()> {
         let repo_abs = dunce::canonicalize(path).map_err(|e| {
             CsError::new(
                 REPO_NOT_FOUND,
@@ -181,7 +201,7 @@ impl Cli {
         let _guard = loop {
             let outcome = crate::bootlock::acquire_guard(
                 &repo_abs,
-                crate::bootlock::DEFAULT_TIMEOUT,
+                Duration::from_secs(lock_timeout.unwrap_or(300)),
                 "向量索引构建",
             )?;
             match outcome {
@@ -383,7 +403,12 @@ impl Cli {
         let rt = tokio::runtime::Runtime::new()
             .map_err(|e| CsError::new(INTERNAL, format!("tokio runtime 启动失败: {e}")))?;
         let cg: Option<Arc<tools::graph::CodegraphEngine>> = match rt.block_on(
-            tools::graph::CodegraphEngine::start(&repo_abs, &cfg.graph.bin, self.fresh_index),
+            tools::graph::CodegraphEngine::start(
+                &repo_abs,
+                &cfg.graph.bin,
+                self.fresh_index,
+                Duration::from_secs(self.lock_timeout.unwrap_or(300)),
+            ),
         ) {
             Ok(engine) => {
                 tracing::debug!("# codegraph MCP ready（explore/callers/callees/impact/files）");
@@ -438,6 +463,9 @@ impl Cli {
                 },
                 &cfg,
                 self.repo_map,
+                // EN-8/D025：--fresh-index 显式重建优先，同给时 --stale-ok 失效
+                self.stale_ok && !self.fresh_index,
+                Duration::from_secs(self.lock_timeout.unwrap_or(300)),
                 &mut registry,
             ) {
                 Ok(Some(suffix)) => first_suffix = Some(suffix),
@@ -645,6 +673,8 @@ fn setup_vector_layer(
     ctx: &VectorLayerCtx<'_>,
     cfg: &config::Config,
     repo_map: bool,
+    stale_ok: bool,
+    lock_timeout: Duration,
     registry: &mut tools::ToolRegistry,
 ) -> CsResult<Option<String>> {
     let mode = match cfg.vector.embed_mode.as_str() {
@@ -668,61 +698,67 @@ fn setup_vector_layer(
     // D020：等待后获得 = 对手刚完成构建，产物已就绪，跳过构建直接开库。
     // P007 R2.5：Lost≠产物就绪——对手可能中途崩溃留下缺失/残缺产物；
     // 产物缺失时重新竞争引导锁（上限 3 次），超限弹性降级（无召回层继续）。
+    // EN-8/D025：--stale-ok 且产物在 → 跳过引导刷新（新鲜度检查/补建），直接开库。
+    // 文档直出等已知入口场景：略旧索引完全可接受，不值得付重嵌成本与锁争用。
+    // stale_ok 传入前已合并 fresh_index（显式重建优先）；索引缺失仍走正常构建。
     let index_dir = vector::store::project_index_dir(ctx.repo_abs);
     let idx = vector::store::index_path(&index_dir, &vector::store::fingerprint(ctx.repo_abs));
-    let mut lost_retries: u32 = 0;
-    loop {
-        match crate::bootlock::acquire_guard(
-            ctx.repo_abs,
-            crate::bootlock::DEFAULT_TIMEOUT,
-            "向量索引构建",
-        )? {
-            crate::bootlock::BootLockOutcome::Won(vguard) => {
-                // 索引补建失败不致命（弹性降级，E3-R1 engram CS4015 教训）：警告后尝试复用已有索引
-                match ctx.rt.block_on(vector::build_vector_index(
-                    ctx.repo_abs,
-                    &index_dir,
-                    embed.clone(),
-                    mode,
-                    &cfg.index.exclude,
-                )) {
-                    Ok(report) => eprintln!(
-                        "# 向量索引: {} chunks（嵌入 {} 复用 {} 清理 {}）",
-                        report.chunks_total, report.embedded, report.reused, report.gc_removed
-                    ),
-                    Err(e) => {
-                        tracing::warn!(component = "vector_build", error = %e, "向量索引构建失败（降级：尝试复用已有索引）");
-                        // P005 R5.2：非致命降级进审计留痕（best-effort）
-                        record_degraded(ctx.audit, "vector_build", &e);
+    let skip_refresh = stale_ok && idx.exists();
+    if skip_refresh {
+        eprintln!("# 向量索引: --stale-ok 跳过引导刷新，直接使用现有索引（EN-8/D025）");
+    }
+    if !skip_refresh {
+        let mut lost_retries: u32 = 0;
+        loop {
+            match crate::bootlock::acquire_guard(ctx.repo_abs, lock_timeout, "向量索引构建")?
+            {
+                crate::bootlock::BootLockOutcome::Won(vguard) => {
+                    // 索引补建失败不致命（弹性降级，E3-R1 engram CS4015 教训）：警告后尝试复用已有索引
+                    match ctx.rt.block_on(vector::build_vector_index(
+                        ctx.repo_abs,
+                        &index_dir,
+                        embed.clone(),
+                        mode,
+                        &cfg.index.exclude,
+                    )) {
+                        Ok(report) => eprintln!(
+                            "# 向量索引: {} chunks（嵌入 {} 复用 {} 清理 {}）",
+                            report.chunks_total, report.embedded, report.reused, report.gc_removed
+                        ),
+                        Err(e) => {
+                            tracing::warn!(component = "vector_build", error = %e, "向量索引构建失败（降级：尝试复用已有索引）");
+                            // P005 R5.2：非致命降级进审计留痕（best-effort）
+                            record_degraded(ctx.audit, "vector_build", &e);
+                        }
                     }
+                    drop(vguard); // 构建段结束即放锁（D014：锁不跨 LLM 调用、不罩检索）
+                    break;
                 }
-                drop(vguard); // 构建段结束即放锁（D014：锁不跨 LLM 调用、不罩检索）
-                break;
-            }
-            crate::bootlock::BootLockOutcome::OpponentFinished if idx.exists() => {
-                eprintln!("# 向量索引: 另一进程刚完成构建，复用其产物（D020）");
-                break;
-            }
-            crate::bootlock::BootLockOutcome::OpponentFinished => {
-                lost_retries += 1;
-                if lost_retries > 3 {
-                    tracing::warn!(
-                        component = "vector_build",
-                        "对手释放引导锁但产物缺失（疑似中途崩溃），放弃复用，弹性降级为无召回层"
-                    );
-                    let _ = ctx.audit.record(
+                crate::bootlock::BootLockOutcome::OpponentFinished if idx.exists() => {
+                    eprintln!("# 向量索引: 另一进程刚完成构建，复用其产物（D020）");
+                    break;
+                }
+                crate::bootlock::BootLockOutcome::OpponentFinished => {
+                    lost_retries += 1;
+                    if lost_retries > 3 {
+                        tracing::warn!(
+                            component = "vector_build",
+                            "对手释放引导锁但产物缺失（疑似中途崩溃），放弃复用，弹性降级为无召回层"
+                        );
+                        let _ = ctx.audit.record(
                         "degraded",
                         &serde_json::json!({"component": "vector_build", "error": "opponent_lost_without_artifact"}),
                     );
-                    break;
+                        break;
+                    }
+                    tracing::warn!(
+                        component = "vector_build",
+                        "对手释放引导锁但向量索引产物缺失，重新竞争引导锁（{lost_retries}/3）"
+                    );
                 }
-                tracing::warn!(
-                    component = "vector_build",
-                    "对手释放引导锁但向量索引产物缺失，重新竞争引导锁（{lost_retries}/3）"
-                );
             }
         }
-    }
+    } // if !skip_refresh
     let store = match vector::VectorStore::open(&idx) {
         Ok(s) => s,
         Err(e) => {
@@ -952,13 +988,25 @@ mod tests {
             "--base-url",
             "http://x",
             "--fresh-index",
+            "--stale-ok",
             "-vv",
         ])
         .unwrap();
         assert_eq!(cli.output_format, OutputFormat::Json);
         assert!(cli.fresh_index);
+        // EN-8/D025：旗标可达；与 --fresh-index 同给时的优先级合并在调用点
+        // （setup_vector_layer 收 stale_ok && !fresh_index），解析层不互斥
+        assert!(cli.stale_ok);
         assert_eq!(cli.verbose, 2);
         assert_eq!(cli.model.as_deref(), Some("m"));
+    }
+
+    /// EN-8/D025：默认不带旗标 = false（不改变存量行为）
+    #[test]
+    fn stale_ok_defaults_false() {
+        let cli = Cli::try_parse_from(["codesleuth", "任务"]).unwrap();
+        assert!(!cli.stale_ok);
+        assert!(!cli.vector);
     }
 
     #[test]

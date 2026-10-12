@@ -107,11 +107,22 @@ async fn run_cli(bin: &str, args: &[&str], cwd: &Path) -> CsResult<()> {
 
 impl CodegraphEngine {
     /// 生命周期入口（D011；P005 R7.2：可执行名由配置链传入，CODEGRAPH_BIN env 已移除）。
-    pub async fn start(root: &Path, bin: &str, force_reindex: bool) -> CsResult<Self> {
-        Self::start_with_bin(root, bin, force_reindex).await
+    /// EN-9/D025：lock_timeout = 引导锁等待基准（对手推进中自动延展，上限 2×）。
+    pub async fn start(
+        root: &Path,
+        bin: &str,
+        force_reindex: bool,
+        lock_timeout: Duration,
+    ) -> CsResult<Self> {
+        Self::start_with_bin(root, bin, force_reindex, lock_timeout).await
     }
 
-    async fn start_with_bin(root: &Path, bin: &str, force_reindex: bool) -> CsResult<Self> {
+    async fn start_with_bin(
+        root: &Path,
+        bin: &str,
+        force_reindex: bool,
+        lock_timeout: Duration,
+    ) -> CsResult<Self> {
         // D014：索引引导（init/force）进仓库级引导锁，进程间串行化；
         // D020：等待后获得 = 对手刚完成引导，索引已就绪——跳过 init/force 直接进 serve。
         // P007 R1.6：Lost≠「对手成功完成」——对手可能在 init/index --force 半途崩溃
@@ -119,11 +130,7 @@ impl CodegraphEngine {
         // 重新竞争引导锁（上限 LOST_ARTIFACT_RETRIES 次），超限诚实报错。
         let mut lost_retries: u32 = 0;
         loop {
-            match crate::bootlock::acquire_guard(
-                root,
-                crate::bootlock::DEFAULT_TIMEOUT,
-                "codegraph 索引引导",
-            )? {
+            match crate::bootlock::acquire_guard(root, lock_timeout, "codegraph 索引引导")? {
                 crate::bootlock::BootLockOutcome::Won(guard) => {
                     if force_reindex {
                         run_cli(bin, &["index", "--force", "--quiet"], root).await?;
@@ -357,9 +364,14 @@ mod tests {
     #[tokio::test]
     async fn missing_binary_is_structured_error() {
         let dir = tempfile::tempdir().unwrap();
-        let err = CodegraphEngine::start_with_bin(dir.path(), "/nonexistent/cg-test", false)
-            .await
-            .unwrap_err();
+        let err = CodegraphEngine::start_with_bin(
+            dir.path(),
+            "/nonexistent/cg-test",
+            false,
+            Duration::from_secs(300),
+        )
+        .await
+        .unwrap_err();
         assert_eq!(err.code, INDEX_NOT_AVAILABLE);
     }
 

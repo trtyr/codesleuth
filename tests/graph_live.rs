@@ -14,9 +14,14 @@ async fn codegraph_mcp_lifecycle() {
 
     // 1) 生命周期入口：索引缺失则 init，然后 spawn MCP server + 握手
     //    （P005 R7.2：可执行名改由配置链传入，此处用默认名）
-    let engine = CodegraphEngine::start(&repo, "codegraph", false)
-        .await
-        .expect("codegraph 引擎启动失败");
+    let engine = CodegraphEngine::start(
+        &repo,
+        "codegraph",
+        false,
+        std::time::Duration::from_secs(300),
+    )
+    .await
+    .expect("codegraph 引擎启动失败");
     assert!(
         repo.join(".codegraph").exists(),
         "init 应产出 .codegraph/ 索引目录"
