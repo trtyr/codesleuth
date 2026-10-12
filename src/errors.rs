@@ -113,6 +113,30 @@ pub fn report_error(e: &CsError) {
     }
 }
 
+/// 编排层结构化错误 JSON（D026，EN-10）：`--output-format json` 时错误体走单行 JSON
+/// 独立通道——外层脚本按行首 `{"code":` 稳定提取 CS 码，不再被 tracing
+/// ANSI/时间戳/统计行污染（纯函数便于测试；打印见 report_error_structured）。
+pub fn structured_error_json(e: &CsError) -> serde_json::Value {
+    let mut row = serde_json::json!({
+        "code": e.code.to_string(),
+        "message": e.message,
+        "exit_code": e.exit_code(),
+        "retryable": e.retryable,
+    });
+    if let Some(h) = &e.hint {
+        row["hint"] = serde_json::Value::String(h.clone());
+    }
+    if let Some(s) = &e.source_text {
+        row["source"] = serde_json::Value::String(s.clone());
+    }
+    row
+}
+
+/// 结构化错误通道打印：单行 JSON 到 stderr，独立于 tracing 输出。
+pub fn report_error_structured(e: &CsError) {
+    eprintln!("{}", structured_error_json(e));
+}
+
 pub type CsResult<T> = Result<T, CsError>;
 
 #[cfg(test)]
@@ -151,5 +175,23 @@ mod tests {
             e.source_text.as_deref(),
             Some("read config.toml: no such file")
         );
+    }
+
+    /// D026（EN-10）：结构化错误通道——code/exit_code 必带，hint/source 缺席不占位
+    #[test]
+    fn structured_error_json_carries_code_and_optional_fields() {
+        let e = CsError::new(INDEX_LOCKED, "等待超时")
+            .with_hint("可用 --lock-timeout 调高")
+            .with_source("flock: timeout");
+        let v = structured_error_json(&e);
+        assert_eq!(v["code"], "CS4016");
+        assert_eq!(v["exit_code"], 5);
+        assert_eq!(v["hint"], "可用 --lock-timeout 调高");
+        assert_eq!(v["source"], "flock: timeout");
+        assert_eq!(v["retryable"], false);
+        let plain = structured_error_json(&CsError::new(USER_INPUT, "缺任务"));
+        assert_eq!(plain["code"], "CS1001");
+        assert!(plain.get("hint").is_none(), "缺席字段不占位");
+        assert!(plain.get("source").is_none(), "缺席字段不占位");
     }
 }

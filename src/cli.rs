@@ -126,6 +126,8 @@ impl Cli {
     pub fn run(self, session_id: &str) -> i32 {
         // P005 R7.4：session span——run 全程事件自动携带 session_id（结构化串线）
         let _session = tracing::info_span!("session", session_id = %session_id).entered();
+        // D026：match self.command 会 move/partial-move，错误路由 flag 先拍
+        let json_mode = matches!(self.output_format, OutputFormat::Json);
         let overrides = CliOverrides {
             base_url: self.base_url.clone(),
             model: self.model.clone(),
@@ -142,14 +144,14 @@ impl Cli {
                     match Self::run_index_vector(&overrides, &path, lock_timeout) {
                         Ok(()) => 0,
                         Err(e) => {
-                            report_error(&e);
+                            Self::report_error_for(json_mode, &e);
                             e.exit_code()
                         }
                     }
                 } else {
                     // P007 R4.3：--rebuild 旗标已删，非 --vector 一律诚实报错
                     let e = index_structure_error();
-                    report_error(&e);
+                    Self::report_error_for(json_mode, &e);
                     e.exit_code()
                 }
             }
@@ -244,11 +246,24 @@ impl Cli {
         Ok(())
     }
 
+    /// D026（EN-10）：错误出口按输出格式路由——json 模式走单行 JSON 独立通道
+    /// （errors::structured_error_json），其余人读格式；编排层按行首 `{"code":` 稳定提取 CS 码。
+    /// 关联函数带 json_mode 参数：调用方须在 move/partial-move 前先拍 flag（run/run_task）。
+    fn report_error_for(json_mode: bool, e: &CsError) {
+        if json_mode {
+            crate::errors::report_error_structured(e);
+        } else {
+            report_error(e);
+        }
+    }
+
     fn run_task(self, session_id: &str) -> i32 {
+        // self 被 run_task_inner 拿走，错误路由先拍 flag（D026）
+        let json_mode = matches!(self.output_format, OutputFormat::Json);
         match self.run_task_inner(session_id) {
             Ok(()) => 0,
             Err(e) => {
-                report_error(&e);
+                Self::report_error_for(json_mode, &e);
                 e.exit_code()
             }
         }

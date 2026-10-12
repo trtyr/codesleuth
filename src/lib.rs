@@ -24,7 +24,8 @@ pub mod writeguard;
 /// 初始化日志（P005 R7.4）：stderr 人读 + `~/.codesleuth/logs/<session>.log` 归档双轨，
 /// 同过滤同格式；事件在 session span 内自动携带 session_id（结构化串线）。
 /// stdout 纪律（E3 消歧验证发现）：--json 模式下 stdout 只准有报告 JSON，日志一律 stderr + 文件。
-pub fn init_tracing(verbose: u8, session_id: &str) {
+/// D026（EN-10）：json 模式下 stderr 层关 ANSI——编排层按行首 `{"code":` 解析错误体不被转义码污染。
+pub fn init_tracing(verbose: u8, session_id: &str, ansi: bool) {
     use tracing_subscriber::EnvFilter;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
@@ -38,6 +39,7 @@ pub fn init_tracing(verbose: u8, session_id: &str) {
 
     let stderr_layer = tracing_subscriber::fmt::layer()
         .with_target(false)
+        .with_ansi(ansi)
         .with_writer(std::io::stderr);
 
     // 文件归档层：打开失败不阻断（仅 stderr 降级，警告可见）
