@@ -11,3 +11,6 @@ tests/fixtures/**/.codegraph/
 __pycache__/
 *.pyc
 .codesleuth/
+
+# pi 运行时状态（goal ledger 等），不属于仓库
+/.pi/
