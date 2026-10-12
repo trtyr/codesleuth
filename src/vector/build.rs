@@ -27,6 +27,8 @@ pub async fn build_vector_index(
     state_dir: &Path,
     embed: EmbedClient,
     mode: EmbedMode,
+    // D023（EN-6）：config [index].exclude glob，透传 plan_chunks 排除链
+    exclude_globs: &[String],
 ) -> CsResult<BuildReport> {
     let repo_abs = canonicalize(repo_root)
         .map_err(|e| CsError::new(REPO_NOT_FOUND, format!("仓库路径无效: {e}")))?;
@@ -45,7 +47,7 @@ pub async fn build_vector_index(
             Default::default()
         }
     };
-    let chunks = plan_chunks(&repo_abs, &nodes)?;
+    let chunks = plan_chunks(&repo_abs, &nodes, exclude_globs)?;
 
     let store = VectorStore::open(&index_path(state_dir, &fp))?;
     let existing = store.existing_hashes()?;

@@ -333,6 +333,7 @@ dependencies = [
  "dirs 6.0.0",
  "dunce",
  "fff-search",
+ "ignore",
  "reqwest",
  "rusqlite",
  "serde",

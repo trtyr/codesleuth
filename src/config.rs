@@ -16,6 +16,8 @@ pub struct FileConfig {
     #[serde(default)]
     pub vector: FileVector,
     #[serde(default)]
+    pub index: FileIndex,
+    #[serde(default)]
     pub behavior: FileBehavior,
     #[serde(default)]
     pub graph: FileGraph,
@@ -26,6 +28,13 @@ pub struct FileConfig {
 pub struct FileGraph {
     /// codegraph 可执行名（缺席 = "codegraph"）。
     pub bin: Option<String>,
+}
+
+/// 索引层文件形态（D023）：向量索引文件集合的排除链。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct FileIndex {
+    /// gitignore 风格排除 glob（相对仓库根），如 "docs/**"。
+    pub exclude: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -76,6 +85,8 @@ pub struct Config {
     pub llm: LlmConfig,
     pub context: ContextConfig,
     pub vector: VectorConfig,
+    /// 索引层（D023）：排除链。
+    pub index: IndexConfig,
     /// 结图层（P005 R7.2）。
     pub graph: GraphConfig,
     pub thinking_disabled: bool,
@@ -101,6 +112,13 @@ pub struct VectorConfig {
     pub base_url: Option<String>,
     /// 嵌入专用密钥（None = 跟随主 api_key）。
     pub api_key: Option<String>,
+}
+
+/// 索引层参数（D023，EN-6）：向量索引文件集合的排除链。
+/// 三层：.gitignore（ignore crate 标准过滤）+ .codesleuthignore + 本 glob 表。
+#[derive(Debug, Clone, PartialEq)]
+pub struct IndexConfig {
+    pub exclude: Vec<String>,
 }
 
 /// 上下文策略（D013）：压缩阈值 = 模型窗口 × 百分比。
@@ -137,6 +155,9 @@ impl Default for Config {
                 repomap_budget: 24_000,
                 base_url: None,
                 api_key: None,
+            },
+            index: IndexConfig {
+                exclude: Vec::new(),
             },
             thinking_disabled: true,
             graph: GraphConfig {
@@ -279,6 +300,9 @@ fn merge_file(cfg: &mut Config, fc: FileConfig) {
     }
     if let Some(v) = fc.vector.api_key {
         cfg.vector.api_key = Some(v);
+    }
+    if let Some(v) = fc.index.exclude {
+        cfg.index.exclude = v;
     }
     if let Some(v) = fc.graph.bin {
         cfg.graph.bin = v;
@@ -461,6 +485,20 @@ pub fn config_key_table() -> &'static [ConfigKey] {
             },
         },
         ConfigKey {
+            name: "index.exclude",
+            // D023：排除 glob 表——列表键按逗号分隔展示/写入（标量化约定）
+            get: |c| c.index.exclude.join(","),
+            set: |fc, v| {
+                fc.index.exclude = Some(
+                    v.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect(),
+                );
+                Ok(())
+            },
+        },
+        ConfigKey {
             name: "graph.bin",
             get: |c| c.graph.bin.clone(),
             set: |fc, v| {
@@ -527,6 +565,9 @@ pub fn to_file_view(cfg: &Config) -> FileConfig {
         },
         behavior: FileBehavior {
             thinking_on: Some(!cfg.thinking_disabled),
+        },
+        index: FileIndex {
+            exclude: Some(cfg.index.exclude.clone()),
         },
         graph: FileGraph {
             bin: Some(cfg.graph.bin.clone()),
@@ -621,6 +662,7 @@ mod tests {
             "vector.repomap_budget" => "1000",
             "behavior.thinking_on" => "false",
             "graph.bin" => "cg-set",
+            "index.exclude" => "docs/**,drafts/**",
             _ => unreachable!(),
         }
     }

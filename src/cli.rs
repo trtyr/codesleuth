@@ -1,7 +1,8 @@
 //! CLI 命令面（topics/cli-and-output.md）。
 //! 退出码：0 就绪 · 1 用法 · 2 配置/凭据 · 3 上游 LLM · 4 目标库 · 5 索引 · 6 内部。
 //! 输出面（D018）：--output-format report|raw|json（替换原 --json）；
-//! 引导锁 Lost=复用继续（D020）；--require 输出契约（D021，CS2005）。
+//! 引导锁 Lost=复用继续（D020）；--require 输出契约（D021，CS2005）；
+//! 索引排除链（D023，EN-6）：config [index].exclude + .codesleuthignore + .gitignore。
 
 use crate::config::{self, CliOverrides};
 use crate::errors::{
@@ -206,7 +207,11 @@ impl Cli {
             }
         };
         let report = rt.block_on(vector::build_vector_index(
-            &repo_abs, &index_dir, embed, mode,
+            &repo_abs,
+            &index_dir,
+            embed,
+            mode,
+            &cfg.index.exclude,
         ))?;
         eprintln!(
             "# 向量索引: {} chunks（嵌入 {} 复用 {} 清理 {}）→ {}",
@@ -679,6 +684,7 @@ fn setup_vector_layer(
                     &index_dir,
                     embed.clone(),
                     mode,
+                    &cfg.index.exclude,
                 )) {
                     Ok(report) => eprintln!(
                         "# 向量索引: {} chunks（嵌入 {} 复用 {} 清理 {}）",

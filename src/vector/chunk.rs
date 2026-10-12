@@ -4,7 +4,11 @@
 //! 层2 超大滑窗：超 MAX_CHUNK_CHARS 的符号体内按 SUB_WINDOW_LINES 切子块，重拼面包屑。
 //! 层3 兜底：非源码文件（README 标题节 / 其他按窗口）+ codegraph 覆盖不到的 leftover 行。
 
-use crate::errors::{CsError, CsResult, INDEX_NOT_AVAILABLE};
+use crate::errors::{CONFIG_INVALID, CsError, CsResult, INDEX_BUILD_FAILED, INDEX_NOT_AVAILABLE};
+use ignore::{
+    WalkBuilder,
+    overrides::{Override, OverrideBuilder},
+};
 use rusqlite::OptionalExtension;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashSet};
@@ -299,8 +303,41 @@ fn push_windowed(
     }
 }
 
+/// D023（EN-6）：config `[index].exclude` glob → 排除 Override。
+/// `!pattern` = 排除语义；无正模式时未匹配项全部保留（只排除不白名单）。
+fn config_excludes(repo_root: &Path, globs: &[String]) -> CsResult<Override> {
+    let mut ob = OverrideBuilder::new(repo_root);
+    // D023：内置排除目录走 override 剪枝——ignore::Walk 无 skip_current_dir，
+    // override 命中目录即不下降。隐藏目录（.git/.codesleuth/.venv…）已由
+    // hidden(true) 剪枝，此处只补非隐藏项。
+    for d in SKIP_DIRS {
+        if !d.starts_with('.') {
+            ob.add(&format!("!{d}/")).map_err(|e| {
+                CsError::new(CONFIG_INVALID, format!("内置排除目录 {d} 构建失败: {e}"))
+            })?;
+        }
+    }
+    for g in globs {
+        ob.add(&format!("!{g}")).map_err(|e| {
+            CsError::new(
+                CONFIG_INVALID,
+                format!("[index] exclude glob 无效: {g}: {e}"),
+            )
+            .with_hint("glob 语法与 .gitignore 一致（相对仓库根），如 \"docs/**\"")
+        })?;
+    }
+    ob.build()
+        .map_err(|e| CsError::new(CONFIG_INVALID, format!("[index] exclude 构建失败: {e}")))
+}
+
 /// 主块 + leftover + 兜底的编排。nodes 全量（含 file/import/variable），内部自行分层。
-pub fn plan_chunks(repo_root: &Path, nodes: &[SymbolRow]) -> CsResult<Vec<Chunk>> {
+/// D023（EN-6）：文件集合由排除链决定——.gitignore + .codesleuthignore（ignore
+/// crate 标准过滤）+ config `[index].exclude` glob，符号路径与兜底路径同受约束。
+pub fn plan_chunks(
+    repo_root: &Path,
+    nodes: &[SymbolRow],
+    exclude_globs: &[String],
+) -> CsResult<Vec<Chunk>> {
     let mut chunks: Vec<Chunk> = Vec::new();
     let mut covered: BTreeMap<String, Vec<(usize, usize)>> = BTreeMap::new();
     let mut codegraph_files: HashSet<String> = HashSet::new();
@@ -314,7 +351,62 @@ pub fn plan_chunks(repo_root: &Path, nodes: &[SymbolRow]) -> CsResult<Vec<Chunk>
         }
     }
 
+    // 排除链枚举（D023，EN-6）：先行执行——符号循环与兜底循环都吃它的产物。
+    // ignore crate 标准过滤链：.gitignore + .codesleuthignore（自定义名，
+    // gitignore 语法）+ config [index].exclude glob；SKIP_DIRS/SKIP_EXTS 为
+    // 工具固有过滤叠加。非 git 仓库也尊重 .gitignore（require_git(false)）；
+    // 全局 gitignore 不参与——索引行为只由仓库内规则决定（确定性）。
+    let overrides = config_excludes(repo_root, exclude_globs)?;
+    let walk_root = repo_root.to_path_buf();
+    let mut walker = WalkBuilder::new(repo_root);
+    walker
+        .hidden(true)
+        .require_git(false)
+        .git_global(false)
+        .overrides(overrides)
+        .add_custom_ignore_filename(".codesleuthignore")
+        .sort_by_file_path(|_, _| std::cmp::Ordering::Less);
+    let mut files: Vec<std::path::PathBuf> = Vec::new();
+    let mut universe: HashSet<String> = HashSet::new();
+    let mut it = walker.build();
+    loop {
+        let entry = match it.next() {
+            Some(Ok(e)) => e,
+            Some(Err(e)) => {
+                return Err(CsError::new(
+                    INDEX_BUILD_FAILED,
+                    format!("索引目录遍历失败: {e}"),
+                ));
+            }
+            None => break,
+        };
+        let p = entry.path();
+        if p == repo_root {
+            continue;
+        }
+        if entry.file_type().is_some_and(|ft| ft.is_dir()) {
+            // 目录下降由 override/gitignore 剪枝（SKIP_DIRS 已进 override，见上）
+            continue;
+        }
+        let rel = match p.strip_prefix(repo_root) {
+            Ok(r) => r.to_string_lossy().replace('\\', "/"),
+            Err(_) => continue,
+        };
+        // 排除后的全集：符号路径也以此为准（EN-6 符号块同受排除链约束）
+        universe.insert(rel);
+        let ext = p.extension().map(|x| x.to_string_lossy().to_string());
+        match ext {
+            Some(e) if !SKIP_EXTS.contains(&e.as_str()) => files.push(p.to_path_buf()),
+            None => files.push(p.to_path_buf()),
+            _ => {}
+        }
+    }
+
     for (file, syms) in &by_file {
+        // D023：排除链同时管住符号路径——被排除文件不再产出符号块/leftover
+        if !universe.contains(file.as_str()) {
+            continue;
+        }
         let abs = repo_root.join(file);
         let Some(lines) = read_lines(&abs) else {
             continue;
@@ -430,30 +522,8 @@ pub fn plan_chunks(repo_root: &Path, nodes: &[SymbolRow]) -> CsResult<Vec<Chunk>
         }
     }
 
-    // 兜底：磁盘上存在但 codegraph 未覆盖的文本文件
-    let walk_root = repo_root.to_path_buf();
-    let mut stack = vec![walk_root.clone()];
-    let mut files: Vec<std::path::PathBuf> = Vec::new();
-    while let Some(dir) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for e in rd.flatten() {
-            let p = e.path();
-            let name = e.file_name().to_string_lossy().to_string();
-            if p.is_dir() {
-                if !SKIP_DIRS.contains(&name.as_str()) {
-                    stack.push(p);
-                }
-            } else if let Some(ext) = p.extension().map(|x| x.to_string_lossy().to_string()) {
-                if !SKIP_EXTS.contains(&ext.as_str()) {
-                    files.push(p);
-                }
-            } else {
-                files.push(p);
-            }
-        }
-    }
+    // 兜底块生产：枚举已在符号循环前完成（universe/files 见上）。
+    // 此段必须在 covered 填充后运行——用 covered 判 codegraph 已覆盖文件。
     for p in files {
         let Ok(rel) = p.strip_prefix(&walk_root) else {
             continue;
@@ -544,7 +614,7 @@ mod tests {
             docstring: None,
             signature: None,
         }];
-        let chunks = plan_chunks(dir.path(), &nodes).unwrap();
+        let chunks = plan_chunks(dir.path(), &nodes, &[]).unwrap();
         assert!(
             chunks.is_empty(),
             "空文件应被跳过，实际 {} chunks",
@@ -583,7 +653,7 @@ mod tests {
             sym("core", "function", "src/lib.rs", 5, 7, "rust"),
             sym("helper", "function", "src/lib.rs", 9, 11, "rust"),
         ];
-        let chunks = plan_chunks(dir.path(), &nodes).unwrap();
+        let chunks = plan_chunks(dir.path(), &nodes, &[]).unwrap();
         let main: Vec<_> = chunks.iter().filter(|c| c.symbol != "<leftover>").collect();
         assert_eq!(main.len(), 2, "file 容器节点必须被丢: {chunks:?}");
         assert!(main[0].text.contains("src/lib.rs › core（function）"));
@@ -608,7 +678,7 @@ mod tests {
         let src = format!("fn big() {{\n{body}}}\n");
         write_file(dir.path(), "src/big.rs", &src);
         let nodes = vec![sym("big", "function", "src/big.rs", 1, 302, "rust")];
-        let chunks = plan_chunks(dir.path(), &nodes).unwrap();
+        let chunks = plan_chunks(dir.path(), &nodes, &[]).unwrap();
         let main: Vec<_> = chunks.iter().filter(|c| c.symbol == "big").collect();
         assert!(main.len() >= 3, "超大符号应切多块: {}", main.len());
         assert!(
@@ -627,7 +697,7 @@ mod tests {
             .map(|i| format!("line {i} {}\n", "内容".repeat(20)))
             .collect();
         std::fs::write(dir.path().join("big.txt"), &body).unwrap();
-        let chunks = plan_chunks(dir.path(), &[]).unwrap();
+        let chunks = plan_chunks(dir.path(), &[], &[]).unwrap();
         assert!(chunks.len() > 1, "超长文件应被切多块");
         for c in &chunks {
             assert!(
@@ -648,7 +718,7 @@ mod tests {
             "README.md",
             "# Title\nintro\n\n## 使用\nusage text\n\n## 架构\narch text\n",
         );
-        let chunks = plan_chunks(dir.path(), &[]).unwrap();
+        let chunks = plan_chunks(dir.path(), &[], &[]).unwrap();
         let md: Vec<_> = chunks.iter().filter(|c| c.file == "README.md").collect();
         assert!(md.len() >= 2, "README 应按标题切节: {chunks:?}");
         assert!(md.iter().any(|c| c.text.contains("usage text")));
@@ -660,7 +730,7 @@ mod tests {
         let src = "/// 装饰器：重试逻辑。\n/// 更多说明。\ndef retry():\n    pass\n";
         write_file(dir.path(), "src/mod.py", src);
         let nodes = vec![sym("retry", "function", "src/mod.py", 3, 4, "python")];
-        let chunks = plan_chunks(dir.path(), &nodes).unwrap();
+        let chunks = plan_chunks(dir.path(), &nodes, &[]).unwrap();
         let c = chunks.iter().find(|c| c.symbol == "retry").unwrap();
         assert!(
             c.text.contains("装饰器：重试逻辑。"),
@@ -687,5 +757,70 @@ mod tests {
         // 不存在的库 → 结构化错误
         let err = symbols_from_codegraph(&dir.path().join("nope.db")).unwrap_err();
         assert_eq!(err.code, crate::errors::INDEX_NOT_AVAILABLE);
+    }
+
+    // ---- D023（EN-6）排除链回归 ----
+
+    #[test]
+    fn gitignored_file_is_not_chunked() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".gitignore"), "secret*\nblob/\n").unwrap();
+        write_file(dir.path(), "README.md", "# 标题\n正文内容足够成块\n");
+        write_file(dir.path(), "secret.txt", "机密内容不应进入索引\n");
+        write_file(dir.path(), "blob/note.md", "blob 目录内容不应进入索引\n");
+        let chunks = plan_chunks(dir.path(), &[], &[]).unwrap();
+        assert!(
+            chunks.iter().all(|c| !c.file.starts_with("secret")),
+            "gitignored 文件不得入块: {:?}",
+            chunks.iter().map(|c| &c.file).collect::<Vec<_>>()
+        );
+        assert!(
+            chunks.iter().all(|c| c.file != "blob/note.md"),
+            "gitignored 目录内文件不得入块"
+        );
+        assert!(
+            chunks.iter().any(|c| c.file == "README.md"),
+            "未排除文件应正常入块"
+        );
+    }
+
+    #[test]
+    fn config_exclude_glob_filters_fallback_and_symbol_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "docs/deliver.md", "# 交付文档\n不应被索引\n");
+        write_file(dir.path(), "src/main.py", "def alive():\n    pass\n");
+        write_file(dir.path(), "docs/leak.py", "def ghost():\n    pass\n");
+        let nodes = vec![
+            sym("alive", "function", "src/main.py", 1, 2, "python"),
+            sym("ghost", "function", "docs/leak.py", 1, 2, "python"),
+        ];
+        let globs = vec!["docs/**".to_string()];
+        let chunks = plan_chunks(dir.path(), &nodes, &globs).unwrap();
+        assert!(
+            chunks.iter().all(|c| !c.file.starts_with("docs/")),
+            "exclude glob 应同时管住兜底与符号路径: {:?}",
+            chunks.iter().map(|c| &c.file).collect::<Vec<_>>()
+        );
+        assert!(chunks.iter().any(|c| c.file == "src/main.py"));
+    }
+
+    #[test]
+    fn codesleuthignore_is_respected() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".codesleuthignore"), "drafts/**\n").unwrap();
+        write_file(dir.path(), "drafts/wip.md", "草稿不入索引\n");
+        write_file(dir.path(), "keep.md", "# 保留\n正常内容\n");
+        let chunks = plan_chunks(dir.path(), &[], &[]).unwrap();
+        assert!(chunks.iter().all(|c| !c.file.starts_with("drafts/")));
+        assert!(chunks.iter().any(|c| c.file == "keep.md"));
+    }
+
+    #[test]
+    fn invalid_exclude_glob_is_structured_config_error() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "a.md", "内容\n");
+        let globs = vec!["[".to_string()]; // 未闭合字符类 = glob 语法错误
+        let err = plan_chunks(dir.path(), &[], &globs).unwrap_err();
+        assert_eq!(err.code, crate::errors::CONFIG_INVALID);
     }
 }
