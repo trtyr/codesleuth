@@ -63,6 +63,9 @@ pub struct Cli {
     /// 输出契约·行首锚定（D022）：标记必须独占某行行首（防一行流糊弄），可多次
     #[arg(long = "require-line", value_name = "MARKER")]
     pub require_line: Vec<String>,
+    /// 输出契约·出现次数（D027，EN-11）：标记出现 ≥ N 次才算产出（防引用式糊弄），可多次
+    #[arg(long = "require-count", value_names = ["MARKER", "N"])]
+    pub require_count: Vec<String>,
     /// 启用 repo map 预算化注入（P003 E2）
     #[arg(long)]
     pub repo_map: bool,
@@ -531,7 +534,26 @@ impl Cli {
             Some(suffix) => agent.with_first_user_suffix(suffix),
             None => agent,
         };
-        let agent = if self.require.is_empty() && self.require_line.is_empty() {
+        // D027：--require-count 成对解析（MARKER N），奇数个/N 非法 → 用法错误
+        let mut require_counts: Vec<(String, usize)> = Vec::new();
+        for pair in self.require_count.chunks(2) {
+            if pair.len() != 2 {
+                return Err(CsError::new(
+                    USER_INPUT,
+                    "--require-count 需要 MARKER N 成对给出",
+                )
+                .with_hint("示例：--require-count '<!--doc:start:a1-->' 3"));
+            }
+            let n: usize = pair[1].parse().map_err(|_| {
+                CsError::new(USER_INPUT, format!("--require-count 的 N 非法: {}", pair[1]))
+                    .with_hint("N 为非负整数（标记需出现的最少次数）")
+            })?;
+            require_counts.push((pair[0].clone(), n));
+        }
+        let agent = if self.require.is_empty()
+            && self.require_line.is_empty()
+            && require_counts.is_empty()
+        {
             agent
         } else {
             let a = if self.require.is_empty() {
@@ -539,10 +561,15 @@ impl Cli {
             } else {
                 agent.with_required_markers(self.require.clone())
             };
-            if self.require_line.is_empty() {
+            let a = if self.require_line.is_empty() {
                 a
             } else {
                 a.with_required_line_markers(self.require_line.clone())
+            };
+            if require_counts.is_empty() {
+                a
+            } else {
+                a.with_required_count_markers(require_counts)
             }
         };
         // P007 R2.4：失败会话同样做考后自证——失败恰是最需要自证的会话
