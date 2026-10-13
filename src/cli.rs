@@ -297,14 +297,21 @@ impl Cli {
             mode,
             &cfg.index.exclude,
         ))?;
-        eprintln!(
-            "# 向量索引: {} chunks（嵌入 {} 复用 {} 清理 {}）→ {}",
-            report.chunks_total,
-            report.embedded,
-            report.reused,
-            report.gc_removed,
-            report.index_path.display()
-        );
+        if report.skipped {
+            eprintln!(
+                "# 向量索引: nothing to embed（git 快道：HEAD 未变且工作区 clean）→ {}",
+                report.index_path.display()
+            );
+        } else {
+            eprintln!(
+                "# 向量索引: {} chunks（嵌入 {} 复用 {} 清理 {}）→ {}",
+                report.chunks_total,
+                report.embedded,
+                report.reused,
+                report.gc_removed,
+                report.index_path.display()
+            );
+        }
         Ok(())
     }
 
@@ -992,6 +999,9 @@ fn vector_boot(
                         mode,
                         &cfg.index.exclude,
                     )) {
+                        Ok(report) if report.skipped => eprintln!(
+                            "# 向量索引: nothing to embed（git 快道：HEAD 未变且工作区 clean）"
+                        ),
                         Ok(report) => eprintln!(
                             "# 向量索引: {} chunks（嵌入 {} 复用 {} 清理 {}）",
                             report.chunks_total, report.embedded, report.reused, report.gc_removed
