@@ -581,7 +581,11 @@ impl Cli {
             Some(suffix) => agent.with_first_user_suffix(suffix),
             None => agent,
         };
-        // D027：--require-count 成对解析（MARKER N），奇数个/N 非法 → 用法错误
+        // EN-16/D031：--out 指定 → 落盘补轮期望（契约违约终局前逼一次交付）
+        let agent = match &self.out {
+            Some(out_path) => agent.with_expected_out(out_path.display().to_string()),
+            None => agent,
+        };
         let mut require_counts: Vec<(String, usize)> = Vec::new();
         for pair in self.require_count.chunks(2) {
             if pair.len() != 2 {
@@ -1310,6 +1314,8 @@ async fn run_batch_session(
         Some(s) => agent.with_first_user_suffix(s),
         None => agent,
     };
+    // EN-16/D031：批量产物 out_dir/<id>.md 必然写 → 落盘补轮期望无条件开启
+    let agent = agent.with_expected_out(out_dir.join(format!("{id}.md")).display().to_string());
     let agent = {
         let a = if spec.require.is_empty() {
             agent

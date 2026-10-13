@@ -43,6 +43,8 @@ pub struct Harness {
     first_user_suffix: Option<String>,
     /// D021（C4）：输出契约——调用方声明的必需标记（最终 answer 必须满足）。
     required: Vec<OutputRequirement>,
+    /// EN-16/D031：外层产物路径声明——契约违约终局前多一轮「提交交付」补轮。
+    expected_out: Option<String>,
 }
 
 impl Harness {
@@ -64,6 +66,7 @@ impl Harness {
             compact_percent,
             first_user_suffix: None,
             required: Vec::new(),
+            expected_out: None,
         }
     }
 
@@ -88,6 +91,13 @@ impl Harness {
             reqs.into_iter()
                 .map(|(marker, min)| OutputRequirement::CountAtLeast { marker, min }),
         );
+        self
+    }
+
+    /// EN-16/D031：声明外层产物路径——契约违约终局前多一轮「提交交付」补轮
+    /// （模型只读工具面无法写文件，唯一交付通道是 submit_report）。
+    pub fn with_expected_out(mut self, path: String) -> Self {
+        self.expected_out = Some(path);
         self
     }
 
@@ -120,6 +130,7 @@ impl Harness {
         let mut prose_streak: u32 = 0;
         let mut contract_repaired_prose: bool = false; // D021/R1.4：契约修复轮预算按通道独立
         let mut contract_repaired_submit: bool = false;
+        let mut out_repaired: bool = false; // EN-16/D031：落盘补轮预算（独立，一次）
         let mut turns: u32 = 0;
         let mut executed: u32 = 0;
         let mut total_tokens: u64 = 0;
@@ -251,6 +262,27 @@ impl Harness {
                 let missing = missing_markers(&self.required, &answer);
                 if !missing.is_empty() {
                     if contract_repaired_prose {
+                        // EN-16/D031：落盘补轮（独立预算一次）——模型有实质产出但没按
+                        // 通道交付（「已产出/已随上文输出」退化形态），逼一次 submit_report；
+                        // 补轮仍违约才终局。真实零产出（answer 空）在上一分支已终局，不适用。
+                        if self.expected_out.is_some() && !out_repaired {
+                            out_repaired = true;
+                            self.audit.record(
+                                "out_repair_steer",
+                                &serde_json::json!({"channel": "prose", "out": self.expected_out}),
+                            )?;
+                            messages.push(ChatMessage::Assistant {
+                                content: Some(answer.clone()),
+                                tool_calls: Vec::new(),
+                            });
+                            messages.push(ChatMessage::User {
+                                content: format!(
+                                    "你的产出还没有完成交付：没有调用 submit_report 就是没产出，外层不会落盘任何内容。请立即调用 submit_report 提交结构化报告（answer/findings/dead_ends/confidence），提交后外层会写入 {}。",
+                                    self.expected_out.as_deref().unwrap_or("产物路径")
+                                ),
+                            });
+                            continue;
+                        }
                         return Err(contract_error(&missing));
                     }
                     contract_repaired_prose = true;
@@ -323,6 +355,26 @@ impl Harness {
                             let missing = missing_markers(&self.required, &report.answer);
                             if !missing.is_empty() {
                                 if contract_repaired_submit {
+                                    // EN-16/D031：落盘补轮（独立预算一次）——报告有实质内容但
+                                    // 契约违约，逼一次重新提交；补轮仍违约才终局。
+                                    if self.expected_out.is_some() && !out_repaired {
+                                        out_repaired = true;
+                                        self.audit.record(
+                                            "out_repair_steer",
+                                            &serde_json::json!({"channel": "submit", "out": self.expected_out}),
+                                        )?;
+                                        self.reject_call(
+                                            call,
+                                            &format!(
+                                                "报告未完成交付：请修正后重新 submit_report（缺标记：{}）；外层会把它写入 {}。不要宣告「已产出」——没有合格的 submit_report 就是没有产出。",
+                                                missing.join("、"),
+                                                self.expected_out.as_deref().unwrap_or("产物路径")
+                                            ),
+                                            &mut messages,
+                                        )
+                                        .await?;
+                                        continue;
+                                    }
                                     return Err(contract_error(&missing));
                                 }
                                 contract_repaired_submit = true;
@@ -1168,6 +1220,83 @@ mod tests {
             .with_required_line_markers(line_markers);
         let res = harness.run("任务").await;
         (res, seen, dir)
+    }
+
+    /// EN-16/D031：带落盘补轮期望的 run（契约违约终局前多一轮交付转向）。
+    async fn run_with_out_repair(
+        script: Vec<ChatResponse>,
+        registry: ToolRegistry,
+        markers: Vec<String>,
+    ) -> (
+        CsResult<RunOutcome>,
+        Arc<Mutex<Vec<ChatRequest>>>,
+        tempfile::TempDir,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let audit = Audit::create(dir.path(), "t").unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let provider = Arc::new(Scripted {
+            script: Mutex::new(script.into_iter().collect()),
+            seen: seen.clone(),
+        });
+        let harness = Harness::new(provider, registry, audit, "m".into(), 1_000_000, 60)
+            .with_required_markers(markers)
+            .with_expected_out("codesleuth-batch-out/t1.md".into());
+        let res = harness.run("任务").await;
+        (res, seen, dir)
+    }
+
+    /// EN-16/D031 三态之一：宣称完成未按通道交付 → 落盘补轮救回（补轮轮 submit 收敛）。
+    #[tokio::test]
+    async fn declared_done_without_delivery_rescued_by_out_repair() {
+        let marker = "<!--R-->".to_string();
+        let script = vec![
+            resp_text("prose 正文没有标记"), // prose 1 → 引导 submit
+            resp_text("prose 仍没有标记"),   // prose 2 → 烧契约预算 + 契约转向
+            resp_text("prose 第三次没标记"), // 契约预算已烧 → 落盘补轮（原本直接 CS2005）
+            resp_call(
+                "s1",
+                SUBMIT_TOOL,
+                r#"{"answer":"<!--R--> 正文","findings":[],"confidence":"high"}"#,
+            ), // 补轮轮收敛
+        ];
+        let (res, seen, _dir) =
+            run_with_out_repair(script, ToolRegistry::new(), vec![marker]).await;
+        let out = res.expect("落盘补轮应救回");
+        assert!(!out.report.degraded);
+        assert!(out.report.answer.contains("<!--R-->"));
+        let requests = seen.lock().unwrap();
+        assert!(requests.iter().any(|r| r.messages.iter().any(|m| matches!(
+            m,
+            ChatMessage::User { content } if content.contains("还没有完成交付")
+        ))));
+    }
+
+    /// EN-16/D031 三态之二：落盘补轮预算一次——补轮轮仍不交付 → 终局 CS2005。
+    #[tokio::test]
+    async fn out_repair_budget_is_one_then_final_fail() {
+        let marker = "<!--R-->".to_string();
+        let script = vec![
+            resp_text("prose 正文没有标记"),
+            resp_text("prose 仍没有标记"),
+            resp_text("prose 第三次没标记"),     // → 落盘补轮
+            resp_text("prose 第四次还是没标记"), // 补轮已烧 → CS2005
+        ];
+        let (res, _seen, _dir) =
+            run_with_out_repair(script, ToolRegistry::new(), vec![marker]).await;
+        let err = res.expect_err("补轮预算烧完应终局失败");
+        assert_eq!(err.code, OUTPUT_CONTRACT);
+    }
+
+    /// EN-16/D031 三态之三：真实零产出（answer 恒空）不受落盘补轮救——终局失败。
+    #[tokio::test]
+    async fn real_zero_output_not_rescued_by_out_repair() {
+        let marker = "<!--R-->".to_string();
+        let script = vec![resp_text(""), resp_text(""), resp_text("")];
+        let (res, _seen, _dir) =
+            run_with_out_repair(script, ToolRegistry::new(), vec![marker]).await;
+        let err = res.expect_err("真实零产出应终局失败（补轮不适用）");
+        assert_eq!(err.code, OUTPUT_CONTRACT);
     }
 
     /// D021（C4）三态之一：首次缺失 → 修复轮转向 → 补齐后收敛。
