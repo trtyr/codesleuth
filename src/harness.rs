@@ -9,6 +9,7 @@ use crate::evidence::{EvidenceStore, info_keys};
 use crate::llm::{ChatMessage, ChatRequest, LlmProvider, ToolCallSpec, ToolSchema};
 use crate::report::{Evidence, Finding, Report, ReportStats};
 use crate::tools::ToolRegistry;
+use regex::Regex;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -90,6 +91,15 @@ impl Harness {
         self.required.extend(
             reqs.into_iter()
                 .map(|(marker, min)| OutputRequirement::CountAtLeast { marker, min }),
+        );
+        self
+    }
+
+    /// EN-19/D034：证据模式契约——正则匹配 ≥ min 处才算产出（regex 已在 CLI 层编译验证）。
+    pub fn with_required_patterns(mut self, reqs: Vec<(Regex, usize)>) -> Self {
+        self.required.extend(
+            reqs.into_iter()
+                .map(|(pattern, min)| OutputRequirement::PatternAtLeast { pattern, min }),
         );
         self
     }
@@ -950,6 +960,10 @@ pub enum OutputRequirement {
     /// 出现次数契约（D027，EN-11）：标记在 answer 中出现次数 ≥ min。
     /// 防「引用式糊弄」——把标记当文字复述在总结句里只计 1 次，min ≥ 2 即不通过。
     CountAtLeast { marker: String, min: usize },
+    /// 证据模式计数（EN-19/D034）：answer 中匹配正则 ≥ min 处。
+    /// 「path:line 证据过少」的下限下沉——缺失时会话内补轮（missing 驱动机制自动继承），
+    /// 补不齐才终局；编排层不再整篇重派。
+    PatternAtLeast { pattern: Regex, min: usize },
 }
 
 impl OutputRequirement {
@@ -961,6 +975,13 @@ impl OutputRequirement {
                 let actual = answer.matches(marker.as_str()).count();
                 format!("「{marker}」出现 {actual} 次（要求 ≥ {min} 次；复述/引用标记不计为产出）")
             }
+            OutputRequirement::PatternAtLeast { pattern, min } => {
+                let actual = pattern.find_iter(answer).count();
+                format!(
+                    "证据模式「{}」匹配 {actual} 处（要求 ≥ {min} 处；path:line 形态的真实证据才算产出）",
+                    pattern.as_str()
+                )
+            }
         }
     }
 
@@ -970,6 +991,9 @@ impl OutputRequirement {
             OutputRequirement::LineStart(m) => answer.lines().any(|l| l.starts_with(m.as_str())),
             OutputRequirement::CountAtLeast { marker, min } => {
                 answer.matches(marker.as_str()).count() >= *min
+            }
+            OutputRequirement::PatternAtLeast { pattern, min } => {
+                pattern.find_iter(answer).count() >= *min
             }
         }
     }
@@ -1516,6 +1540,80 @@ mod tests {
         let (res, _seen, _dir) = run_with_out_path(script, ToolRegistry::new(), &out_path).await;
         res.expect("应成功");
         assert!(!outdir.path().join("report.md.partial").exists());
+    }
+
+    /// EN-19/D034：带证据模式契约的 run。
+    async fn run_with_patterns(
+        script: Vec<ChatResponse>,
+        registry: ToolRegistry,
+        patterns: Vec<(Regex, usize)>,
+    ) -> (
+        CsResult<RunOutcome>,
+        Arc<Mutex<Vec<ChatRequest>>>,
+        tempfile::TempDir,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let audit = Audit::create(dir.path(), "t").unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let provider = Arc::new(Scripted {
+            script: Mutex::new(script.into_iter().collect()),
+            seen: seen.clone(),
+        });
+        let harness = Harness::new(provider, registry, audit, "m".into(), 1_000_000, 60)
+            .with_required_patterns(patterns);
+        let res = harness.run("任务").await;
+        (res, seen, dir)
+    }
+
+    /// EN-19/D034：PatternAtLeast 计数语义直测。
+    #[test]
+    fn pattern_requirement_counts_matches() {
+        let req = OutputRequirement::PatternAtLeast {
+            pattern: Regex::new(r"\S+\.rs:\d+").unwrap(),
+            min: 2,
+        };
+        assert!(req.satisfied_by("见 src/a.rs:10 与 src/b.rs:20"));
+        assert!(!req.satisfied_by("只有 src/a.rs:10 一处"));
+        assert!(!req.satisfied_by("无证据"));
+        let d = req.describe("只有 src/a.rs:10 一处");
+        assert!(d.contains("匹配 1 处"), "describe 应带实际计数: {d}");
+    }
+
+    /// EN-19/D034：证据不足 → 契约转向 → 会话内补齐（path:line 模式）收敛。
+    #[tokio::test]
+    async fn evidence_pattern_repaired_in_session() {
+        let script = vec![
+            resp_text("结论但没有证据"),                // prose 1 → 引导
+            resp_text("还是没有证据"),                  // prose 2 → 缺模式 → 契约转向
+            resp_text("见 src/a.rs:10 与 src/b.rs:20"), // 补出两处 path:line → 收敛
+        ];
+        let (res, _seen, _dir) = run_with_patterns(
+            script,
+            ToolRegistry::new(),
+            vec![(Regex::new(r"\S+\.rs:\d+").unwrap(), 2)],
+        )
+        .await;
+        let out = res.expect("证据模式应在会话内补齐（不再整篇重派）");
+        assert!(out.report.degraded);
+    }
+
+    /// EN-19/D034：补轮后仍不足 → 终局 CS2005 + EvidenceShort。
+    #[tokio::test]
+    async fn evidence_pattern_fail_after_repair() {
+        let script = vec![
+            resp_text("结论但没有证据"),
+            resp_text("还是没有证据"),
+            resp_text("第三次仍然没有 path:line 证据"),
+        ];
+        let (res, _seen, _dir) = run_with_patterns(
+            script,
+            ToolRegistry::new(),
+            vec![(Regex::new(r"\S+\.rs:\d+").unwrap(), 2)],
+        )
+        .await;
+        let err = res.expect_err("补轮后仍不足应终局失败");
+        assert_eq!(err.code, OUTPUT_CONTRACT);
+        assert_eq!(err.reason, Some(FailureReason::EvidenceShort));
     }
 
     /// D021（C4）三态之一：首次缺失 → 修复轮转向 → 补齐后收敛。

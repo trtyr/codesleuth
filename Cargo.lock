@@ -334,6 +334,7 @@ dependencies = [
  "dunce",
  "fff-search",
  "ignore",
+ "regex",
  "reqwest",
  "rusqlite",
  "serde",

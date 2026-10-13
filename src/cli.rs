@@ -66,6 +66,9 @@ pub struct Cli {
     /// 输出契约·出现次数（D027，EN-11）：标记出现 ≥ N 次才算产出（防引用式糊弄），可多次
     #[arg(long = "require-count", value_names = ["MARKER", "N"])]
     pub require_count: Vec<String>,
+    /// 输出契约·证据模式（EN-19/D034）：REGEX:MIN——匹配 ≥ MIN 处才算产出，可多次
+    #[arg(long = "require-pattern", value_name = "REGEX:MIN")]
+    pub require_pattern: Vec<String>,
     /// 启用 repo map 预算化注入（P003 E2）
     #[arg(long)]
     pub repo_map: bool,
@@ -603,27 +606,39 @@ impl Cli {
             })?;
             require_counts.push((pair[0].clone(), n));
         }
-        let agent =
-            if self.require.is_empty() && self.require_line.is_empty() && require_counts.is_empty()
-            {
+        // EN-19/D034：--require-pattern 解析（REGEX:MIN），坏模式入口即拒
+        let mut require_patterns: Vec<(regex::Regex, usize)> = Vec::new();
+        for spec in &self.require_pattern {
+            require_patterns.push(parse_require_pattern(spec)?);
+        }
+        let agent = if self.require.is_empty()
+            && self.require_line.is_empty()
+            && require_counts.is_empty()
+            && require_patterns.is_empty()
+        {
+            agent
+        } else {
+            let a = if self.require.is_empty() {
                 agent
             } else {
-                let a = if self.require.is_empty() {
-                    agent
-                } else {
-                    agent.with_required_markers(self.require.clone())
-                };
-                let a = if self.require_line.is_empty() {
-                    a
-                } else {
-                    a.with_required_line_markers(self.require_line.clone())
-                };
-                if require_counts.is_empty() {
-                    a
-                } else {
-                    a.with_required_count_markers(require_counts)
-                }
+                agent.with_required_markers(self.require.clone())
             };
+            let a = if self.require_line.is_empty() {
+                a
+            } else {
+                a.with_required_line_markers(self.require_line.clone())
+            };
+            let a = if require_counts.is_empty() {
+                a
+            } else {
+                a.with_required_count_markers(require_counts)
+            };
+            if require_patterns.is_empty() {
+                a
+            } else {
+                a.with_required_patterns(require_patterns)
+            }
+        };
         // P007 R2.4：失败会话同样做考后自证——失败恰是最需要自证的会话
         let run_result = rt.block_on(agent.run(&task));
         drop(agent);
@@ -1180,6 +1195,9 @@ pub(crate) struct BatchTaskSpec {
     pub require_line: Vec<String>,
     #[serde(default)]
     pub require_count: Vec<(String, usize)>,
+    /// 证据模式契约（EN-19/D034）：REGEX:MIN 形态，可多个
+    #[serde(default)]
+    pub require_pattern: Vec<String>,
 }
 
 /// 解析任务清单：顶层对象 {"tasks":[...]} 或裸数组均可（纯函数可测）。
@@ -1195,9 +1213,31 @@ fn parse_batch_spec(text: &str) -> CsResult<Vec<BatchTaskSpec>> {
         })?
     };
     serde_json::from_value::<Vec<BatchTaskSpec>>(tasks_val).map_err(|e| {
-        CsError::new(USER_INPUT, format!("任务条目解析失败: {e}"))
-            .with_hint("每条需含 task 字段；可选 id/require/require_line/require_count")
+        CsError::new(USER_INPUT, format!("任务条目解析失败: {e}")).with_hint(
+            "每条需含 task 字段；可选 id/require/require_line/require_count/require_pattern",
+        )
     })
+}
+
+/// EN-19/D034：--require-pattern 规格解析——REGEX:MIN（rsplit_once 从右拆，
+/// 正则里可含冒号，MIN 恒在最后一个冒号之后）。坏模式入口即拒（USER_INPUT）。
+pub fn parse_require_pattern(spec: &str) -> CsResult<(regex::Regex, usize)> {
+    let Some((re_src, min)) = spec.rsplit_once(':') else {
+        return Err(CsError::new(
+            USER_INPUT,
+            "--require-pattern 需要 REGEX:MIN 形态（MIN 在最后一个冒号之后）",
+        )
+        .with_hint(r#"示例：--require-pattern '\S+\.rs:\d+:3'（path:line 证据至少 3 处）"#));
+    };
+    let min: usize = min.parse().map_err(|_| {
+        CsError::new(USER_INPUT, format!("--require-pattern 的 MIN 非法: {min}"))
+            .with_hint("MIN 为非负整数")
+    })?;
+    let re = regex::Regex::new(re_src).map_err(|e| {
+        CsError::new(USER_INPUT, format!("--require-pattern 正则非法: {re_src}"))
+            .with_source(e.to_string())
+    })?;
+    Ok((re, min))
 }
 
 /// 产物命名（Q004）：id 缺省 task-<序号>（从 1 起，编排层友好）。
@@ -1327,10 +1367,23 @@ async fn run_batch_session(
         } else {
             a.with_required_line_markers(spec.require_line.clone())
         };
-        if spec.require_count.is_empty() {
+        let a = if spec.require_count.is_empty() {
             a
         } else {
             a.with_required_count_markers(spec.require_count.clone())
+        };
+        // EN-19/D034：证据模式契约（坏模式 fail 记录，不 panic）
+        let mut patterns = Vec::new();
+        for ps in &spec.require_pattern {
+            match parse_require_pattern(ps) {
+                Ok(p) => patterns.push(p),
+                Err(e) => return fail(session_id, e.to_string()),
+            }
+        }
+        if patterns.is_empty() {
+            a
+        } else {
+            a.with_required_patterns(patterns)
         }
     };
     let run_result = agent.run(&spec.task).await;
@@ -1595,6 +1648,42 @@ mod tests {
                 .expect("带契约字段应可解析");
         assert_eq!(specs[0].require, vec!["m1".to_string()]);
         assert_eq!(specs[0].require_count, vec![("n".to_string(), 2)]);
+        // EN-19/D034：require_pattern 可带（REGEX:MIN 字符串数组）
+        let specs = parse_batch_spec(r#"[{"task":"a","require_pattern":["\\S+\\.rs:\\d+:3"]}]"#)
+            .expect("require_pattern 可带");
+        assert_eq!(
+            specs[0].require_pattern,
+            vec![r#"\S+\.rs:\d+:3"#.to_string()]
+        );
+    }
+
+    /// EN-19/D034：--require-pattern 解析（REGEX:MIN）四态。
+    #[test]
+    fn require_pattern_parsing() {
+        // 合法：含冒号的正则（MIN 在最后一个冒号后）
+        let (re, min) = parse_require_pattern(r"\S+\.rs:\d+:3").unwrap();
+        assert_eq!(min, 3);
+        assert!(re.is_match("src/a.rs:10"));
+        // 缺冒号
+        assert!(parse_require_pattern(r"\S+\.rs").is_err());
+        // 坏 MIN
+        assert!(parse_require_pattern(r"\S+\.rs:abc").is_err());
+        // 坏正则
+        assert!(parse_require_pattern(r"[bad:3").is_err());
+    }
+
+    #[test]
+    fn parses_require_pattern_flag() {
+        let cli = Cli::try_parse_from([
+            "codesleuth",
+            "任务",
+            "--repo",
+            ".",
+            "--require-pattern",
+            r"\S+\.rs:\d+:3",
+        ])
+        .unwrap();
+        assert_eq!(cli.require_pattern, vec![r"\S+\.rs:\d+:3".to_string()]);
     }
 
     #[test]
@@ -1621,6 +1710,7 @@ mod tests {
             require: vec![],
             require_line: vec![],
             require_count: vec![],
+            require_pattern: vec![],
         };
         assert_eq!(batch_task_id(&s, 0), "task-1");
         assert_eq!(batch_task_id(&s, 32), "task-33");
