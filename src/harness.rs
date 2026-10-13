@@ -4,7 +4,7 @@
 
 use crate::audit::Audit;
 use crate::context;
-use crate::errors::{CsError, CsResult, LLM_FUSE, OUTPUT_CONTRACT};
+use crate::errors::{CsError, CsResult, FailureReason, LLM_FUSE, OUTPUT_CONTRACT};
 use crate::evidence::{EvidenceStore, info_keys};
 use crate::llm::{ChatMessage, ChatRequest, LlmProvider, ToolCallSpec, ToolSchema};
 use crate::report::{Evidence, Finding, Report, ReportStats};
@@ -212,6 +212,8 @@ impl Harness {
                     "total_tokens": resp.usage.total_tokens,
                     "text": resp.text.clone(),
                     "tool_call_count": resp.tool_calls.len(),
+                    // EN-17/D032：finish_reason 透传进审计（length 截断场景编排可读）
+                    "finish_reason": resp.finish_reason.clone(),
                 }),
             )?;
             // P005 R7.4 补遗（审计偏差修正）：llm_turn 结构化事件——原计划与 tool_exec 同批，
@@ -283,7 +285,14 @@ impl Harness {
                             });
                             continue;
                         }
-                        return Err(contract_error(&missing));
+                        // EN-17/D032：reason 按交付语义区分——落盘补轮烧尽仍未交付 = zero_write；
+                        // 普通契约违约（无 expected_out）= evidence_short
+                        let reason = if out_repaired {
+                            FailureReason::ZeroWrite
+                        } else {
+                            FailureReason::EvidenceShort
+                        };
+                        return Err(contract_error(&missing).with_reason(reason));
                     }
                     contract_repaired_prose = true;
                     self.audit.record(
@@ -375,7 +384,13 @@ impl Harness {
                                         .await?;
                                         continue;
                                     }
-                                    return Err(contract_error(&missing));
+                                    // EN-17/D032：reason 按交付语义区分（同 prose 通道）
+                                    let reason = if out_repaired {
+                                        FailureReason::ZeroWrite
+                                    } else {
+                                        FailureReason::EvidenceShort
+                                    };
+                                    return Err(contract_error(&missing).with_reason(reason));
                                 }
                                 contract_repaired_submit = true;
                                 self.audit.record(
@@ -901,6 +916,7 @@ fn contract_error(missing: &[String]) -> CsError {
         ),
     )
     .with_hint("调用方核对 --require/--require-line 标记是否合理，或更换模型后重试")
+    .with_reason(FailureReason::EvidenceShort)
 }
 
 /// submit_report 结构诊断（D016）：弱模型常把嵌套结构摊平或泄漏内部标记，
@@ -944,10 +960,13 @@ fn fuse_if_hit(streak: u32, audit: &Audit) -> CsResult<Option<CsError>> {
         audit.record("fuse", &serde_json::json!({"no_progress_streak": streak}))?;
         // 熔断 = 会话级失败（P004 T4）：ERROR 级必打，不随 -v 静默
         tracing::error!("熔断触发：连续 {streak} 步无进展（CS2099）");
-        Ok(Some(CsError::new(
-            LLM_FUSE,
-            format!("连续 {streak} 步无进展（重复/非法/零增量），熔断（故障域，非成本限制）"),
-        )))
+        Ok(Some(
+            CsError::new(
+                LLM_FUSE,
+                format!("连续 {streak} 步无进展（重复/非法/零增量），熔断（故障域，非成本限制）"),
+            )
+            .with_reason(FailureReason::Fuse),
+        ))
     } else {
         Ok(None)
     }
@@ -1102,6 +1121,7 @@ mod tests {
             text: Some(s.into()),
             tool_calls: vec![],
             usage: Usage::default(),
+            finish_reason: None,
         }
     }
 
@@ -1113,6 +1133,7 @@ mod tests {
                 text: None,
                 tool_calls: vec![],
                 usage: Usage::default(),
+                finish_reason: None,
             }
         }
         let script = vec![resp_none(), resp_none(), resp_none()];
@@ -1170,6 +1191,7 @@ mod tests {
                 arguments: args.into(),
             }],
             usage: Usage::default(),
+            finish_reason: None,
         }
     }
 
@@ -1286,6 +1308,7 @@ mod tests {
             run_with_out_repair(script, ToolRegistry::new(), vec![marker]).await;
         let err = res.expect_err("补轮预算烧完应终局失败");
         assert_eq!(err.code, OUTPUT_CONTRACT);
+        assert_eq!(err.reason, Some(FailureReason::ZeroWrite));
     }
 
     /// EN-16/D031 三态之三：真实零产出（answer 恒空）不受落盘补轮救——终局失败。
@@ -1333,6 +1356,7 @@ mod tests {
         let (res, _seen, _dir) = run_with_markers(script, ToolRegistry::new(), vec![marker]).await;
         let err = res.expect_err("修复轮后仍缺应判失败");
         assert_eq!(err.code, OUTPUT_CONTRACT);
+        assert_eq!(err.reason, Some(FailureReason::EvidenceShort));
     }
 
     /// D021（C4）三态之三：prose 降级路径同样过契约（缺失→转向→仍缺→CS2005）。
@@ -1559,6 +1583,7 @@ mod tests {
         let err = res.unwrap_err();
         assert_eq!(err.code, LLM_FUSE);
         assert_eq!(err.exit_code(), 3);
+        assert_eq!(err.reason, Some(FailureReason::Fuse));
     }
 
     #[tokio::test]

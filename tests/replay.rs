@@ -51,6 +51,7 @@ fn load_script() -> (Arc<Mutex<Vec<String>>>, VecDeque<ChatResponse>) {
             text: None,
             tool_calls: calls,
             usage: Usage::default(),
+            finish_reason: None,
         });
     }
     (seq, out)

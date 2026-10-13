@@ -92,6 +92,7 @@ fn resp_call(id: &str, name: &str, args: &str) -> ChatResponse {
             arguments: args.into(),
         }],
         usage: Usage::default(),
+        finish_reason: None,
     }
 }
 

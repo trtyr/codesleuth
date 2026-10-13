@@ -55,6 +55,39 @@ pub const INDEX_LOCKED: CsCode = CsCode(4016);
 pub const INTERNAL: CsCode = CsCode(5001);
 // 5099 ENGINE_NOT_WIRED 预留段位（P005 R6.2 清理零引用常量）
 
+/// EN-17/D032：稳定失败原因码——机器可读失败分类，编排层按码分流
+/// （parse_fail 原地重试 / truncated 提示输出约束 / fuse 换切分策略）。
+/// `as_str()` 输出即对外稳定字符串契约（serde 序列化同形）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureReason {
+    /// LLM 响应解析失败（含自修轮后仍失败）
+    ParseFail,
+    /// 连续无进展熔断（CS2099）
+    Fuse,
+    /// 宣称完成但零产出/未按通道交付（落盘补轮烧尽，EN-16）
+    ZeroWrite,
+    /// 输出契约违约（有产出但不合格：缺标记/证据不足）
+    EvidenceShort,
+    /// LLM 输出被截断（finish_reason=length）
+    Truncated,
+    /// 等待超时（锁等）
+    Timeout,
+}
+
+impl FailureReason {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            FailureReason::ParseFail => "parse_fail",
+            FailureReason::Fuse => "fuse",
+            FailureReason::ZeroWrite => "zero_write",
+            FailureReason::EvidenceShort => "evidence_short",
+            FailureReason::Truncated => "truncated",
+            FailureReason::Timeout => "timeout",
+        }
+    }
+}
+
 /// 一等错误：码 + 消息 + 修复建议 + 可重试标记。
 #[derive(Debug, thiserror::Error)]
 #[error("{code}: {message}")]
@@ -66,6 +99,8 @@ pub struct CsError {
     /// 根因链（P004 T3）：内层错误原文，供程序化溯源；人话仍在 message。
     /// 字段名避开 `source`：thiserror 会把名为 source 的字段自动当 Error::source()，String 不满足。
     pub source_text: Option<String>,
+    /// EN-17/D032：稳定失败原因码——机器可读分类（None = 无细分必要，不伪造）。
+    pub reason: Option<FailureReason>,
 }
 
 impl CsError {
@@ -76,6 +111,7 @@ impl CsError {
             hint: None,
             retryable: false,
             source_text: None,
+            reason: None,
         }
     }
 
@@ -97,12 +133,18 @@ impl CsError {
         self
     }
 
+    /// EN-17/D032：挂稳定失败原因码（机器可读分类）。
+    pub fn with_reason(mut self, reason: FailureReason) -> Self {
+        self.reason = Some(reason);
+        self
+    }
+
     pub fn exit_code(&self) -> i32 {
         self.code.exit_code()
     }
 }
 
-/// stderr 结构化报错（人读主行 + hint 行）。
+/// stderr 结构化报错（人读主行 + hint 行 + 原因码尾行）。
 pub fn report_error(e: &CsError) {
     eprintln!("{e}");
     if let Some(src) = &e.source_text {
@@ -110,6 +152,10 @@ pub fn report_error(e: &CsError) {
     }
     if let Some(hint) = &e.hint {
         eprintln!("  hint: {hint}");
+    }
+    // EN-17/D032 人读轨：稳定原因码尾行（宽松编排层按行首 CS_REASON= 提取）
+    if let Some(r) = &e.reason {
+        eprintln!("CS_REASON={}", r.as_str());
     }
 }
 
@@ -128,6 +174,10 @@ pub fn structured_error_json(e: &CsError) -> serde_json::Value {
     }
     if let Some(s) = &e.source_text {
         row["source"] = serde_json::Value::String(s.clone());
+    }
+    // EN-17/D032 机器轨：稳定原因码（Some 时出现，缺席不占位——同 hint/source 风格）
+    if let Some(r) = &e.reason {
+        row["reason"] = serde_json::Value::String(r.as_str().to_string());
     }
     row
 }
@@ -193,5 +243,25 @@ mod tests {
         assert_eq!(plain["code"], "CS1001");
         assert!(plain.get("hint").is_none(), "缺席字段不占位");
         assert!(plain.get("source").is_none(), "缺席字段不占位");
+        assert!(plain.get("reason").is_none(), "缺席字段不占位");
+    }
+
+    /// EN-17/D032：稳定原因码——as_str 映射表全值 + json 通道带 reason（Some 时出现）
+    #[test]
+    fn failure_reason_stable_codes_and_json_channel() {
+        assert_eq!(FailureReason::ParseFail.as_str(), "parse_fail");
+        assert_eq!(FailureReason::Fuse.as_str(), "fuse");
+        assert_eq!(FailureReason::ZeroWrite.as_str(), "zero_write");
+        assert_eq!(FailureReason::EvidenceShort.as_str(), "evidence_short");
+        assert_eq!(FailureReason::Truncated.as_str(), "truncated");
+        assert_eq!(FailureReason::Timeout.as_str(), "timeout");
+
+        let e = CsError::new(LLM_RATE_LIMITED, "429").with_reason(FailureReason::Timeout);
+        assert_eq!(structured_error_json(&e)["reason"], "timeout");
+        // serde 序列化同形（对外稳定字符串契约）
+        assert_eq!(
+            serde_json::to_value(FailureReason::EvidenceShort).unwrap(),
+            "evidence_short"
+        );
     }
 }

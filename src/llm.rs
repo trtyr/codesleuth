@@ -2,8 +2,8 @@
 //! 重试/退避在本层做；最终失败后 retryable=false（宿主不再重试）。
 
 use crate::errors::{
-    CONFIG_MISSING, CsCode, CsError, CsResult, LLM_BAD_RESPONSE, LLM_RATE_LIMITED, LLM_SERVER,
-    LLM_UNREACHABLE,
+    CONFIG_MISSING, CsCode, CsError, CsResult, FailureReason, LLM_BAD_RESPONSE, LLM_RATE_LIMITED,
+    LLM_SERVER, LLM_UNREACHABLE,
 };
 use async_openai::types::chat::{
     ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls,
@@ -79,6 +79,8 @@ pub struct ChatResponse {
     pub text: Option<String>,
     pub tool_calls: Vec<ToolCallSpec>,
     pub usage: Usage,
+    /// EN-17/D032：finish_reason 透传（stop/tool_calls/length/...）——审计与编排可读
+    pub finish_reason: Option<String>,
 }
 
 /// OpenAI 兼容实现（newapi 等网关同此协议）。
@@ -329,6 +331,10 @@ fn map_response(resp: CreateChatCompletionResponse) -> CsResult<ChatResponse> {
     Ok(ChatResponse {
         text: choice.message.content,
         tool_calls,
+        // EN-17/D032：finish_reason 透传（截断=length 场景编排层可读，不再猜）
+        finish_reason: serde_json::to_value(choice.finish_reason)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string)),
         usage: Usage {
             prompt_tokens: usage.prompt_tokens,
             completion_tokens: usage.completion_tokens,
@@ -377,10 +383,19 @@ impl LlmProvider for OpenAiProvider {
                         Ok(resp)
                     }
                     Err(e2) => {
+                        // EN-17/D032：稳定原因码——坏响应解出 finish_reason=length 判
+                        // Truncated（输出约束问题），否则 ParseFail（schema 漂移）
+                        let truncated = text.contains(r#""finish_reason":"length""#)
+                            || text.contains(r#""finish_reason": "length""#);
                         let ce = CsError::new(
                             LLM_BAD_RESPONSE,
                             format!("LLM 响应解析失败（含自修轮）: 原轮={e}; 自修轮={e2}"),
-                        );
+                        )
+                        .with_reason(if truncated {
+                            FailureReason::Truncated
+                        } else {
+                            FailureReason::ParseFail
+                        });
                         tracing::error!("LLM 调用终局失败: {ce}");
                         Err(ce.with_retryable(false))
                     }
@@ -776,6 +791,7 @@ mod tests {
             .expect_err("两轮全畸形应终局失败");
         assert_eq!(err.code, LLM_BAD_RESPONSE);
         assert!(!err.retryable);
+        assert_eq!(err.reason, Some(FailureReason::ParseFail));
         assert!(
             err.to_string().contains("自修轮"),
             "终局错误应带两轮上下文: {err}"

@@ -15,7 +15,7 @@
 //! 无陈旧锁问题；锁文件常驻 `.codesleuth/`（writeguard 豁免目录，D011 式工具元数据）。
 //! 同步阻塞轮询只发生在锁竞争路径（上限 timeout），引导期短任务可接受。
 
-use crate::errors::{CsError, CsResult, INDEX_LOCKED, REPO_NOT_READABLE};
+use crate::errors::{CsError, CsResult, FailureReason, INDEX_LOCKED, REPO_NOT_READABLE};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -214,7 +214,8 @@ pub fn acquire(repo_root: &Path, timeout: Duration) -> CsResult<BootLock> {
             )
             .with_hint(
                 "另一进程长时间持锁且无进展（可能正在建大仓索引）；可用 --lock-timeout 调高等待上限，或确认其结束后重跑",
-            ));
+            )
+            .with_reason(FailureReason::Timeout));
         }
     }
 }
@@ -285,6 +286,7 @@ mod tests {
         let h = std::thread::spawn(move || {
             let err = acquire(&root, Duration::from_millis(300)).unwrap_err();
             assert_eq!(err.code, INDEX_LOCKED);
+            assert_eq!(err.reason, Some(FailureReason::Timeout));
         });
         // 超时 300ms < 轮询间隔 500ms：等待者必然在第一次轮询前撞死线。
         std::thread::sleep(Duration::from_millis(800));
