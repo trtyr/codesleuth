@@ -108,7 +108,76 @@ impl Harness {
         self
     }
 
+    /// EN-18/D033：外层编排——重试注入（读 <out>.partial）+ 失败留档 + 成功清理。
     pub async fn run(&self, task: &str) -> CsResult<RunOutcome> {
+        let partial_path = self.expected_out.as_ref().map(|p| format!("{p}.partial"));
+        let prior = partial_path
+            .as_deref()
+            .and_then(|p| std::fs::read_to_string(p).ok());
+        let result = self.run_inner(task, prior.as_deref()).await;
+        match &result {
+            Ok(_) => {
+                // 成功清理：部分成果已完整交付，过期 partial 不得残留
+                if let Some(p) = &partial_path {
+                    let _ = std::fs::remove_file(p);
+                }
+            }
+            Err(e) => {
+                if let Some(p) = &partial_path {
+                    self.dump_partial(p, e);
+                }
+            }
+        }
+        result
+    }
+
+    /// EN-18/D033：失败时把部分成果 dump 到 <out>.partial（best-effort——
+    /// 留档失败静默，不掩盖原始失败）。内容：失败原因 + 已读文件清单 + 工具输出截断。
+    fn dump_partial(&self, path: &str, e: &CsError) {
+        let Ok(lines) = self.audit.read_range(0, self.audit.last_seq()) else {
+            return;
+        };
+        let paths = match self.evidence.lock() {
+            Ok(g) => g.observed_paths(),
+            Err(poisoned) => poisoned.into_inner().observed_paths(),
+        };
+        let mut out =
+            String::from("# codesleuth partial 成果（上一轮会话失败留档，重试接着跑）\n\n");
+        out.push_str(&format!(
+            "- 失败：{e}（reason: {}）\n",
+            e.reason.map(|r| r.as_str()).unwrap_or("none")
+        ));
+        out.push_str(&format!(
+            "- 已读文件（真实读过内容）：{}\n\n",
+            if paths.is_empty() {
+                "（无）".to_string()
+            } else {
+                paths.join(", ")
+            }
+        ));
+        out.push_str("## 已收集工具输出（每条截断 500B，最多 20 条）\n\n");
+        let mut count = 0usize;
+        for (_, payload) in lines {
+            if count >= 20 {
+                break;
+            }
+            if payload.get("kind").and_then(|k| k.as_str()) != Some("tool_result") {
+                continue;
+            }
+            let Some(output) = payload.get("output").and_then(|o| o.as_str()) else {
+                continue;
+            };
+            let name = payload.get("name").and_then(|n| n.as_str()).unwrap_or("?");
+            out.push_str(&format!(
+                "### {name}\n{}\n\n",
+                crate::llm::safe_prefix(output, 500)
+            ));
+            count += 1;
+        }
+        let _ = std::fs::write(path, &out);
+    }
+
+    async fn run_inner(&self, task: &str, partial: Option<&str>) -> CsResult<RunOutcome> {
         let mut messages = vec![
             ChatMessage::System {
                 content: crate::prompt::SYSTEM_PROMPT.into(),
@@ -117,6 +186,15 @@ impl Harness {
                 content: task.to_string(),
             },
         ];
+        // EN-18/D033：重试注入——上一轮 partial 成果随任务注入，不从零重复探索
+        if let Some(p) = partial {
+            messages.push(ChatMessage::User {
+                content: format!(
+                    "[上一轮会话在此任务上失败，以下为已收集的部分成果（截断）。优先复用，不要从零重复探索：\n{}]",
+                    crate::llm::safe_prefix(p, 8000)
+                ),
+            });
+        }
         if let Some(suffix) = &self.first_user_suffix
             && let Some(ChatMessage::User { content }) = messages.last_mut()
         {
@@ -1320,6 +1398,124 @@ mod tests {
             run_with_out_repair(script, ToolRegistry::new(), vec![marker]).await;
         let err = res.expect_err("真实零产出应终局失败（补轮不适用）");
         assert_eq!(err.code, OUTPUT_CONTRACT);
+    }
+
+    /// EN-18/D033：带产物路径的 run（partial dump / 注入 / 清理验证用）。
+    async fn run_with_out_path(
+        script: Vec<ChatResponse>,
+        registry: ToolRegistry,
+        out_path: &std::path::Path,
+    ) -> (
+        CsResult<RunOutcome>,
+        Arc<Mutex<Vec<ChatRequest>>>,
+        tempfile::TempDir,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let audit = Audit::create(dir.path(), "t").unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let provider = Arc::new(Scripted {
+            script: Mutex::new(script.into_iter().collect()),
+            seen: seen.clone(),
+        });
+        let harness = Harness::new(provider, registry, audit, "m".into(), 1_000_000, 60)
+            .with_expected_out(out_path.display().to_string());
+        let res = harness.run("任务").await;
+        (res, seen, dir)
+    }
+
+    /// EN-18/D033：熔断后 partial 落盘（失败原因 + 已读清单 + 工具输出）且不污染正式产物。
+    #[tokio::test]
+    async fn fuse_dumps_partial_with_evidence() {
+        let calls = Arc::new(Mutex::new(0u32));
+        let mut reg = ToolRegistry::new();
+        reg.register(Box::new(Echo {
+            calls: calls.clone(),
+            output: "found in src/retry.rs".into(),
+        }));
+        let outdir = tempfile::tempdir().unwrap();
+        let out_path = outdir.path().join("report.md");
+        // 首轮 echo 产出路径证据（observe_exact 入库 + tool_result 审计），
+        // 随后同 call 重复 → 逐次计无进展 → 熔断
+        let script = vec![
+            resp_call("t1", "echo", r#"{"q":1}"#),
+            resp_call("d1", "echo", r#"{"q":1}"#),
+            resp_call("d2", "echo", r#"{"q":1}"#),
+            resp_call("d3", "echo", r#"{"q":1}"#),
+            resp_call("d4", "echo", r#"{"q":1}"#),
+            resp_call("d5", "echo", r#"{"q":1}"#),
+        ];
+        let (res, _seen, _dir) = run_with_out_path(script, reg, &out_path).await;
+        let err = res.expect_err("熔断应终局失败");
+        assert_eq!(err.reason, Some(FailureReason::Fuse));
+        let partial = std::fs::read_to_string(outdir.path().join("report.md.partial"))
+            .expect("partial 应落盘");
+        assert!(partial.contains("fuse"), "失败原因应入档");
+        assert!(partial.contains("src/retry.rs"), "已读清单应入档");
+        assert!(partial.contains("found in src/retry.rs"), "工具输出应入档");
+        assert!(!out_path.exists(), "正式产物不得被 partial 污染");
+    }
+
+    /// EN-18/D033：重试注入（第二次 run 携带 partial 内容）+ 成功后清理。
+    #[tokio::test]
+    async fn retry_injects_partial_and_clears_on_success() {
+        let outdir = tempfile::tempdir().unwrap();
+        let out_path = outdir.path().join("report.md");
+        let partial_path = outdir.path().join("report.md.partial");
+        // 第一次：熔断落盘
+        {
+            let calls = Arc::new(Mutex::new(0u32));
+            let mut reg = ToolRegistry::new();
+            reg.register(Box::new(Echo {
+                calls: calls.clone(),
+                output: "found in src/retry.rs".into(),
+            }));
+            let script = vec![
+                resp_call("t1", "echo", r#"{"q":1}"#),
+                resp_call("d1", "echo", r#"{"q":1}"#),
+                resp_call("d2", "echo", r#"{"q":1}"#),
+                resp_call("d3", "echo", r#"{"q":1}"#),
+                resp_call("d4", "echo", r#"{"q":1}"#),
+                resp_call("d5", "echo", r#"{"q":1}"#),
+            ];
+            let (res, _seen, _dir) = run_with_out_path(script, reg, &out_path).await;
+            assert!(res.is_err(), "第一轮应熔断失败");
+        }
+        assert!(partial_path.exists(), "第一次失败后 partial 应存在");
+        // 第二次：成功 → 注入发生 + partial 清理
+        {
+            let script = vec![resp_call(
+                "s1",
+                SUBMIT_TOOL,
+                r#"{"answer":"结论正文","findings":[],"confidence":"high"}"#,
+            )];
+            let (res, seen, _dir) = run_with_out_path(script, ToolRegistry::new(), &out_path).await;
+            res.expect("第二次应成功");
+            let requests = seen.lock().unwrap();
+            assert!(requests[0].messages.iter().any(|m| matches!(
+                m,
+                ChatMessage::User { content } if content.contains("上一轮会话在此任务上失败")
+            )));
+            assert!(requests[0].messages.iter().any(|m| matches!(
+                m,
+                ChatMessage::User { content } if content.contains("src/retry.rs")
+            )));
+        }
+        assert!(!partial_path.exists(), "成功后 partial 应清理");
+    }
+
+    /// EN-18/D033：无失败不落 partial（成功 run 零残留）。
+    #[tokio::test]
+    async fn no_partial_on_success_run() {
+        let outdir = tempfile::tempdir().unwrap();
+        let out_path = outdir.path().join("report.md");
+        let script = vec![resp_call(
+            "s1",
+            SUBMIT_TOOL,
+            r#"{"answer":"结论正文","findings":[],"confidence":"high"}"#,
+        )];
+        let (res, _seen, _dir) = run_with_out_path(script, ToolRegistry::new(), &out_path).await;
+        res.expect("应成功");
+        assert!(!outdir.path().join("report.md.partial").exists());
     }
 
     /// D021（C4）三态之一：首次缺失 → 修复轮转向 → 补齐后收敛。
