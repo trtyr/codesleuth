@@ -110,14 +110,119 @@ impl OpenAiProvider {
     /// 网关响应容错解码（D015）：先落 serde_json::Value 剥掉非标枚举字段再走 typed 解码。
     /// 第三方网关（如 MiniMax-M3 经 newapi）会回 `service_tier: "standard"` 等 OpenAI
     /// 官方枚举之外的值，async-openai 严格枚举零容忍，整条响应 CS2004 炸死。
+    /// EN-15/D029：typed 仍失败时先过 normalize_response_value 宽松归一（确定性、零 LLM）
+    /// 再试一次——单值↔数组、未知 finish_reason、usage 类型漂移等已知炸点就地修复。
     fn decode_response(text: &str) -> CsResult<CreateChatCompletionResponse> {
         let mut v: serde_json::Value = serde_json::from_str(text)
             .map_err(|e| CsError::new(LLM_BAD_RESPONSE, format!("LLM 响应非 JSON: {e}")))?;
         if let Some(obj) = v.as_object_mut() {
             obj.remove("service_tier"); // 非标枚举值头号来源（D015）
         }
-        serde_json::from_value(v)
-            .map_err(|e| CsError::new(LLM_BAD_RESPONSE, format!("LLM 响应解析失败: {e}")))
+        match serde_json::from_value(v.clone()) {
+            Ok(resp) => Ok(resp),
+            Err(e) => {
+                Self::normalize_response_value(&mut v);
+                serde_json::from_value(v).map_err(|e2| {
+                    CsError::new(
+                        LLM_BAD_RESPONSE,
+                        format!("LLM 响应解析失败: {e2}（原始: {e}）"),
+                    )
+                })
+            }
+        }
+    }
+
+    /// 宽松归一化（EN-15/D029 第一层）：typed 解码失败后的确定性修复，零 LLM 调用。
+    /// 只处理「形状对但类型漂移」的已知炸点；语义级损坏交给自修轮（build_repair_request）。
+    fn normalize_response_value(v: &mut serde_json::Value) {
+        let Some(obj) = v.as_object_mut() else { return };
+        if let Some(c) = obj.get_mut("choices") {
+            // 炸点①：choices 单对象（invalid type: map, expected a sequence）
+            if c.is_object() {
+                *c = serde_json::Value::Array(vec![c.take()]);
+            }
+            let Some(arr) = c.as_array_mut() else { return };
+            for choice in arr.iter_mut() {
+                let Some(cm) = choice.as_object_mut() else {
+                    continue;
+                };
+                // 炸点②：finish_reason 未知/null → "stop"（保底；length 真截断信息归 EN-17 透传）
+                if let Some(fr) = cm.get_mut("finish_reason") {
+                    let known = matches!(fr,
+                    serde_json::Value::String(s) if matches!(
+                        s.as_str(), "stop" | "tool_calls" | "length" | "content_filter" | "function_call"
+                    ));
+                    if !known {
+                        *fr = serde_json::Value::String("stop".into());
+                    }
+                }
+                // 炸点③：message 缺失/null → 合成空 assistant（invalid type: null）
+                let bad_msg = cm.get("message").map(|m| !m.is_object()).unwrap_or(true);
+                if bad_msg {
+                    cm.insert(
+                        "message".into(),
+                        serde_json::json!({"role": "assistant", "content": ""}),
+                    );
+                }
+                if let Some(m) = cm.get_mut("message").and_then(|m| m.as_object_mut()) {
+                    if let Some(ct) = m.get_mut("content") {
+                        // 炸点④：content multipart 数组 → 拼接 text 部分
+                        if let Some(parts) = ct.as_array() {
+                            let joined = parts
+                                .iter()
+                                .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
+                                .collect::<Vec<_>>()
+                                .join("");
+                            *ct = serde_json::Value::String(joined);
+                        } else if !ct.is_string() && !ct.is_null() {
+                            // 炸点④b：content 其他非串类型（数字等）→ 字符串化，比炸掉好
+                            let s = match &*ct {
+                                serde_json::Value::String(s) => s.clone(),
+                                other => serde_json::to_string(other).unwrap_or_default(),
+                            };
+                            *ct = serde_json::Value::String(s);
+                        }
+                    }
+                    // 炸点⑤：tool_calls 单对象 → 包数组
+                    if let Some(tc) = m.get_mut("tool_calls")
+                        && tc.is_object()
+                    {
+                        *tc = serde_json::Value::Array(vec![tc.take()]);
+                    }
+                }
+            }
+        }
+        // 炸点⑥：usage null → 删除（map_response unwrap_or_default 兜底）
+        if obj.get("usage").map(|u| u.is_null()).unwrap_or(false) {
+            obj.remove("usage");
+        }
+        // 炸点⑦：usage 数值字段字符串数字 → 转数字（invalid type: string, expected u32）
+        if let Some(u) = obj.get_mut("usage").and_then(|u| u.as_object_mut()) {
+            for k in ["prompt_tokens", "completion_tokens", "total_tokens"] {
+                if let Some(serde_json::Value::String(s)) = u.get(k)
+                    && let Ok(n) = s.parse::<u32>()
+                {
+                    u.insert(k.into(), serde_json::json!(n));
+                }
+            }
+        }
+    }
+
+    /// 自修轮请求构造（EN-15/D029 第二层）：坏响应原文（截断）+ 解析错误喂回模型重造。
+    /// 恰好追加 1 条 User 消息；tools 保留（自修轮可能需要继续产出 tool_calls）。
+    fn build_repair_request(req: &ChatRequest, bad_text: &str, err: &CsError) -> ChatRequest {
+        let mut messages = req.messages.clone();
+        messages.push(ChatMessage::User {
+            content: format!(
+                "你上一次的响应无法被程序解析（错误：{err}）。上次响应原文（截断）：\n{}\n请重新输出完整、格式正确的响应：content 必须是纯文本字符串（或合法 tool_calls 数组），不要混入其他类型。",
+                safe_prefix(bad_text, 2000)
+            ),
+        });
+        ChatRequest {
+            model: req.model.clone(),
+            messages,
+            tools: req.tools.clone(),
+        }
     }
 
     fn build_request(req: &ChatRequest) -> CsResult<CreateChatCompletionRequest> {
@@ -243,6 +348,83 @@ impl LlmProvider for OpenAiProvider {
             body["thinking"] = serde_json::json!({"type": "disabled"});
         }
         let url = format!("{}/chat/completions", self.base_url);
+        let text = self.send_with_retry(&url, &body).await?;
+        // EN-15/D029：decode（含宽松归一）与 map（choices 空等）失败都触发自修轮——
+        // 坏响应 + 解析错误喂回模型重造，≤1 轮；chat() 内聚行为，不占外层 dispatch
+        // 重试额度；自修轮单次发送不退避，usage 取自修轮（原轮解析失败无有效 usage）。
+        match Self::decode_response(&text).and_then(map_response) {
+            Ok(resp) => Ok(resp),
+            Err(e) => {
+                tracing::warn!("LLM 响应解析失败，启动自修轮（≤1 轮）: {e}");
+                let repair = Self::build_repair_request(req, &text, &e);
+                let repair_request = Self::build_request(&repair)?;
+                let mut repair_body = serde_json::to_value(&repair_request).map_err(|e2| {
+                    CsError::new(LLM_BAD_RESPONSE, format!("自修请求序列化失败: {e2}"))
+                })?;
+                if self.thinking_disabled {
+                    repair_body["thinking"] = serde_json::json!({"type": "disabled"});
+                }
+                let text2 = self.send_once(&url, &repair_body).await.map_err(|ce| {
+                    CsError::new(
+                        LLM_BAD_RESPONSE,
+                        format!("响应解析失败且自修轮发送失败: 原={e}; 自修={ce}"),
+                    )
+                    .with_retryable(false)
+                })?;
+                match Self::decode_response(&text2).and_then(map_response) {
+                    Ok(resp) => {
+                        tracing::info!("LLM 自修轮收敛（解析恢复）");
+                        Ok(resp)
+                    }
+                    Err(e2) => {
+                        let ce = CsError::new(
+                            LLM_BAD_RESPONSE,
+                            format!("LLM 响应解析失败（含自修轮）: 原轮={e}; 自修轮={e2}"),
+                        );
+                        tracing::error!("LLM 调用终局失败: {ce}");
+                        Err(ce.with_retryable(false))
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl OpenAiProvider {
+    /// 单次发送（不重试不退避）：状态码分类内聚（P007 R3.1 classify_llm_error），
+    /// 200 后读响应体；传输瞬断归 LLM_UNREACHABLE+retryable（P007 R3.2）。
+    async fn send_once(&self, url: &str, body: &serde_json::Value) -> Result<String, CsError> {
+        let resp = self
+            .http
+            .post(url)
+            .bearer_auth(&self.api_key)
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| {
+                CsError::new(LLM_UNREACHABLE, format!("LLM 请求失败: {e}")).with_retryable(true)
+            })?;
+        let status = resp.status();
+        if !status.is_success() {
+            let snippet = resp.text().await.unwrap_or_default();
+            let (code, retryable) = classify_llm_error(Some(status.as_u16()), &snippet);
+            return Err(CsError::new(
+                code,
+                format!("LLM HTTP {status}: {}", safe_prefix(&snippet, 200)),
+            )
+            .with_retryable(retryable));
+        }
+        resp.text().await.map_err(|e| {
+            CsError::new(
+                LLM_UNREACHABLE,
+                format!("LLM 响应体读取失败（连接中断？）: {e}"),
+            )
+            .with_retryable(true)
+        })
+    }
+
+    /// 带重试退避的发送：attempts = max_retries+1；指数退避 1s/2s/4s/8s（封顶）。
+    async fn send_with_retry(&self, url: &str, body: &serde_json::Value) -> CsResult<String> {
         let attempts = self.max_retries.saturating_add(1).max(1);
         let mut last: Option<CsError> = None;
         for attempt in 0..attempts {
@@ -251,73 +433,16 @@ impl LlmProvider for OpenAiProvider {
                 // P007 R3.15：注释曾写 500ms/1s/2s/4s，与实现不符，已同步。
                 tokio::time::sleep(Duration::from_millis(500u64 << attempt.min(4))).await;
             }
-            let outcome = self
-                .http
-                .post(&url)
-                .bearer_auth(&self.api_key)
-                .json(&body)
-                .send()
-                .await;
-            match outcome {
-                Ok(resp) => {
-                    let status = resp.status();
-                    if !status.is_success() {
-                        let snippet = resp.text().await.unwrap_or_default();
-                        // P007 R3.1：分类单一事实源——生产路径与测试共用 classify_llm_error，
-                        // 5xx 归 LLM_SERVER（不再误报速率限制）
-                        let (code, retryable) = classify_llm_error(Some(status.as_u16()), &snippet);
-                        let ce = CsError::new(
-                            code,
-                            format!("LLM HTTP {status}: {}", safe_prefix(&snippet, 200)),
-                        )
-                        .with_retryable(retryable);
-                        if ce.retryable && attempt + 1 < attempts {
-                            tracing::warn!("LLM 第 {} 次调用失败（可重试）: {}", attempt + 1, ce);
-                            last = Some(ce);
-                            continue;
-                        }
-                        tracing::error!("LLM 调用终局失败: {ce}");
-                        return Err(ce.with_retryable(false));
-                    }
-                    // P007 R3.2：200 状态下响应体读取失败（网关中途断连）不再吞成空串——
-                    // 那会被 decode_response 错分类为不可重试 CS2004；本质是传输瞬断，可重试
-                    let body = match resp.text().await {
-                        Ok(t) => t,
-                        Err(e) => {
-                            let ce = CsError::new(
-                                LLM_UNREACHABLE,
-                                format!("LLM 响应体读取失败（连接中断？）: {e}"),
-                            )
-                            .with_retryable(true);
-                            if attempt + 1 < attempts {
-                                tracing::warn!(
-                                    "LLM 第 {} 次调用失败（可重试）: {}",
-                                    attempt + 1,
-                                    ce
-                                );
-                                last = Some(ce);
-                                continue;
-                            }
-                            return Err(ce.with_retryable(false));
-                        }
-                    };
-                    match Self::decode_response(&body) {
-                        Ok(resp) => return map_response(resp),
-                        Err(e) => {
-                            tracing::error!("LLM 调用终局失败: {e}");
-                            return Err(e.with_retryable(false));
-                        }
-                    }
-                }
-                Err(e) => {
-                    let ce = CsError::new(LLM_UNREACHABLE, format!("LLM 请求失败: {e}"))
-                        .with_retryable(true);
-                    if attempt + 1 < attempts {
+            match self.send_once(url, body).await {
+                Ok(t) => return Ok(t),
+                Err(ce) => {
+                    if ce.retryable && attempt + 1 < attempts {
                         tracing::warn!("LLM 第 {} 次调用失败（可重试）: {}", attempt + 1, ce);
                         last = Some(ce);
                         continue;
                     }
-                    tracing::warn!("LLM 调用终局失败: {ce}");
+                    // 终局失败 ERROR 级必打（P004 T4 语义：防线失败不可随 -v 静默）
+                    tracing::error!("LLM 调用终局失败: {ce}");
                     return Err(ce.with_retryable(false));
                 }
             }
@@ -436,6 +561,230 @@ mod tests {
         let err = OpenAiProvider::decode_response("<html>gateway 502</html>").unwrap_err();
         assert_eq!(err.code, LLM_BAD_RESPONSE);
         assert!(!err.retryable);
+    }
+
+    // ===== EN-15/D029：宽松归一化（第一层，纯本地）=====
+
+    #[test]
+    fn normalize_wraps_scalar_choices_and_repairs_envelope() {
+        // 炸点①②③：choices 单对象 + finish_reason 未知 + message 缺失
+        let mut v: serde_json::Value = serde_json::from_str(
+            r#"{"id":"x","object":"chat.completion","created":1,"model":"m","choices":{"finish_reason":"mini_max","index":0}}"#,
+        )
+        .unwrap();
+        OpenAiProvider::normalize_response_value(&mut v);
+        let resp: CreateChatCompletionResponse = serde_json::from_value(v).unwrap();
+        assert_eq!(resp.choices.len(), 1);
+        assert_eq!(resp.choices[0].message.content.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn normalize_joins_multipart_content_and_scalar_tool_calls() {
+        // 炸点④⑤：content multipart 数组拼接 + tool_calls 单对象包数组
+        let mut v: serde_json::Value = serde_json::from_str(
+            r#"{"id":"x","object":"chat.completion","created":1,"model":"m","choices":[{"finish_reason":"stop","index":0,"message":{"role":"assistant","content":[{"type":"text","text":"好"},{"type":"text","text":"的"}],"tool_calls":{"id":"c1","type":"function","function":{"name":"grep","arguments":"{}"}}}}]}"#,
+        )
+        .unwrap();
+        OpenAiProvider::normalize_response_value(&mut v);
+        let resp: CreateChatCompletionResponse = serde_json::from_value(v).unwrap();
+        assert_eq!(resp.choices[0].message.content.as_deref(), Some("好的"));
+        let tcs = resp.choices[0]
+            .message
+            .tool_calls
+            .clone()
+            .unwrap_or_default();
+        assert_eq!(tcs.len(), 1);
+        match &tcs[0] {
+            ChatCompletionMessageToolCalls::Function(f) => {
+                assert_eq!(f.function.name, "grep");
+            }
+            _ => panic!("应为 function 型 tool_call"),
+        }
+    }
+
+    #[test]
+    fn normalize_repairs_usage_shape() {
+        // 炸点⑥⑦：usage null → 删除；usage 字符串数字 → 转数字
+        let mut v: serde_json::Value = serde_json::from_str(
+            r#"{"id":"x","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"x"}}],"usage":null}"#,
+        )
+        .unwrap();
+        OpenAiProvider::normalize_response_value(&mut v);
+        let resp: CreateChatCompletionResponse = serde_json::from_value(v).unwrap();
+        // usage null 被删除 → typed 解码不再炸，usage 为 None（map_response 层 unwrap_or_default 兕底）
+        assert!(resp.usage.is_none());
+
+        let mut v2: serde_json::Value = serde_json::from_str(
+            r#"{"id":"x","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"x"}}],"usage":{"prompt_tokens":"8","completion_tokens":"2","total_tokens":"10"}}"#,
+        )
+        .unwrap();
+        OpenAiProvider::normalize_response_value(&mut v2);
+        let resp2: CreateChatCompletionResponse = serde_json::from_value(v2).unwrap();
+        let u = resp2.usage.as_ref().unwrap();
+        assert_eq!(u.total_tokens, 10);
+        assert_eq!(u.prompt_tokens, 8);
+    }
+
+    #[test]
+    fn decode_response_recovers_after_normalization() {
+        // EN-15 端到端（解码层）：typed 直解炸（choices 单对象）→ 宽松归一救回
+        let raw = r#"{"id":"x","object":"chat.completion","created":1,"model":"m","choices":{"finish_reason":"stop","index":0,"message":{"role":"assistant","content":"回复正文"}},"usage":{"total_tokens":5,"prompt_tokens":4,"completion_tokens":1}}"#;
+        let direct: Result<CreateChatCompletionResponse, _> = serde_json::from_str(raw);
+        assert!(direct.is_err(), "对照组应复现 invalid type 炸点");
+        let resp = OpenAiProvider::decode_response(raw).expect("宽松归一后应解码成功");
+        assert_eq!(resp.choices[0].message.content.as_deref(), Some("回复正文"));
+    }
+
+    #[test]
+    fn decode_response_non_json_still_fails() {
+        // 非 JSON 永远不可修：归一层不碰、自修轮才接手
+        let err = OpenAiProvider::decode_response("<html>gateway 502</html>").unwrap_err();
+        assert_eq!(err.code, LLM_BAD_RESPONSE);
+        assert!(!err.retryable);
+    }
+
+    // ===== EN-15/D029：自修轮（第二层）=====
+
+    #[test]
+    fn repair_request_appends_single_user_with_error_context() {
+        let req = ChatRequest {
+            model: "m".into(),
+            messages: vec![ChatMessage::User {
+                content: "任务".into(),
+            }],
+            tools: vec![ToolSchema {
+                name: "grep".into(),
+                description: "d".into(),
+                parameters: serde_json::json!({}),
+            }],
+        };
+        let err = CsError::new(LLM_BAD_RESPONSE, "invalid type: map, expected a sequence");
+        let repair = OpenAiProvider::build_repair_request(&req, "坏响应原文片段", &err);
+        assert_eq!(repair.messages.len(), 2, "恰好追加 1 条消息");
+        assert_eq!(repair.model, "m");
+        assert_eq!(repair.tools.len(), 1, "tools 保留");
+        let ChatMessage::User { content } = &repair.messages[1] else {
+            panic!("追加的应是 User 消息");
+        };
+        assert!(content.contains("invalid type: map"));
+        assert!(content.contains("坏响应原文片段"));
+    }
+
+    // ===== EN-15/D029：端到端（one-shot TCP mock，零新依赖）=====
+
+    async fn spawn_mock(
+        bodies: Vec<String>,
+        hits: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            for body in bodies {
+                let (mut sock, _) = listener.accept().await.unwrap();
+                hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                // 读一次请求（测试请求体小，64KB 足够），不解析——HTTP 服务端可未读完先答
+                let mut buf = vec![0u8; 65536];
+                let _ = AsyncReadExt::read(&mut sock, &mut buf).await;
+                let mut http = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .into_bytes();
+                http.extend_from_slice(body.as_bytes());
+                let _ = sock.write_all(&http).await;
+                let _ = sock.shutdown().await;
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    fn good_body(content: &str) -> String {
+        format!(
+            r#"{{"id":"x","object":"chat.completion","created":1,"model":"m","choices":[{{"finish_reason":"stop","index":0,"message":{{"content":"{content}","role":"assistant"}}}}],"usage":{{"total_tokens":5,"prompt_tokens":4,"completion_tokens":1}}}}"#
+        )
+    }
+
+    fn unsalvageable_body() -> String {
+        // choices 为字符串：宽松归一救不了（既非对象也非数组），必触发自修
+        r#"{"id":"x","object":"chat.completion","created":1,"model":"m","choices":"垃圾响应"}"#
+            .into()
+    }
+
+    fn test_request() -> ChatRequest {
+        ChatRequest {
+            model: "m".into(),
+            messages: vec![ChatMessage::User {
+                content: "任务".into(),
+            }],
+            tools: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn chat_lenient_layer_avoids_repair_round() {
+        // 第一层宽松归一就地救回（choices 单对象）：仅 1 次请求，零自修零重试
+        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let salvageable = r#"{"id":"x","object":"chat.completion","created":1,"model":"m","choices":{"finish_reason":"stop","index":0,"message":{"role":"assistant","content":"归一救回"}}}"#.to_string();
+        let base = spawn_mock(vec![salvageable], hits.clone()).await;
+        let provider = OpenAiProvider::new(&base, "k", 0, true);
+        let resp = provider
+            .chat(&test_request())
+            .await
+            .expect("宽松层应就地救回");
+        assert_eq!(resp.text.as_deref(), Some("归一救回"));
+        assert_eq!(
+            hits.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "仅 1 次请求：宽松层兜住，未触发自修"
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_recovers_via_single_repair_round() {
+        // 原轮不可修畸形 → 自修 1 轮收敛：恰好 2 次请求（max_retries=0，无重试干扰）
+        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let base = spawn_mock(
+            vec![unsalvageable_body(), good_body("自修收敛")],
+            hits.clone(),
+        )
+        .await;
+        let provider = OpenAiProvider::new(&base, "k", 0, true);
+        let resp = provider.chat(&test_request()).await.expect("自修轮应收敛");
+        assert_eq!(resp.text.as_deref(), Some("自修收敛"));
+        assert_eq!(resp.usage.total_tokens, 5, "usage 取自修轮");
+        assert_eq!(
+            hits.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "恰好 2 次请求（原 1 + 自修 1）"
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_repair_round_is_capped_at_one() {
+        // 两轮全畸形 → CS2004 终局；恰好 2 次请求：自修不循环、不占 max_retries 额度
+        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let base = spawn_mock(
+            vec![unsalvageable_body(), unsalvageable_body()],
+            hits.clone(),
+        )
+        .await;
+        let provider = OpenAiProvider::new(&base, "k", 0, true);
+        let err = provider
+            .chat(&test_request())
+            .await
+            .expect_err("两轮全畸形应终局失败");
+        assert_eq!(err.code, LLM_BAD_RESPONSE);
+        assert!(!err.retryable);
+        assert!(
+            err.to_string().contains("自修轮"),
+            "终局错误应带两轮上下文: {err}"
+        );
+        assert_eq!(
+            hits.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "自修恰好 1 轮：不循环、不占重试额度"
+        );
     }
 
     #[test]
