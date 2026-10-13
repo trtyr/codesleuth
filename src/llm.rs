@@ -1,5 +1,7 @@
 //! LLM provider 抽象（Q001/D009）：OpenAI 兼容协议，async-openai + 自定义 base_url。
 //! 重试/退避在本层做；最终失败后 retryable=false（宿主不再重试）。
+//! P002 加固：解析崩自修（D029，EN-15 宽松归一先行 + 喂回补轮兜底 ≤1 轮）+
+//! 失败原因码（D032，EN-17 parse_fail/truncated 细分）+ finish_reason 透传。
 
 use crate::errors::{
     CONFIG_MISSING, CsCode, CsError, CsResult, FailureReason, LLM_BAD_RESPONSE, LLM_RATE_LIMITED,

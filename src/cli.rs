@@ -3,6 +3,8 @@
 //! 输出面（D018）：--output-format report|raw|json（替换原 --json）；
 //! 引导锁 Lost=复用继续（D020）；--require 输出契约（D021，CS2005）；
 //! 索引排除链（D023，EN-6）：config [index].exclude + .codesleuthignore + .gitignore。
+//! P002：落盘补轮期望（D031，EN-16 --out/batch 产物）+ 证据模式计数
+//! --require-pattern REGEX:MIN（D034，EN-19，与 D027 字面计数共存）。
 
 use crate::config::{self, CliOverrides};
 use crate::errors::{

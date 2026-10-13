@@ -1,6 +1,9 @@
 //! Agent 主循环（solution-map §3）：LLM 决策 → 工具调度 → 增量记账 → 收敛/熔断。
 //! 收敛 = submit_report（结构化报告 + 证据校验）或 prose 降级；空转结构性禁止（D002）；
 //! 上下文装不下 → 确定性压缩 + recall 钻取（D008）。
+//! P002 加固：落盘补轮（D031，EN-16 宣称完成未交付逼一次 submit）+ partial 成果
+//! 留档与重试注入（D033，EN-18 失败不白烧）+ 证据模式契约（D034，EN-19 path:line
+//! 下限会话内补齐）+ 失败原因码打点（D032，EN-17）。
 
 use crate::audit::Audit;
 use crate::context;
